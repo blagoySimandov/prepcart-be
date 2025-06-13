@@ -17,16 +17,23 @@ module.exports = {
     project: ["tsconfig.json", "tsconfig.dev.json"],
     sourceType: "module",
   },
-  ignorePatterns: [
-    "/lib/**/*", // Ignore built files.
-    "/generated/**/*", // Ignore generated files.
-    ".eslintrc.js",
-  ],
+  ignorePatterns: ["/lib/**/*", "/generated/**/*", ".eslintrc.js"],
   plugins: ["@typescript-eslint", "import"],
   rules: {
     quotes: ["error", "double"],
     "import/no-unresolved": 0,
     indent: ["error", 2],
-    "object-curly-spacing": ["error", "always"], // <--- Add this line
+    "object-curly-spacing": ["error", "always"],
+    "max-len": [
+      "error",
+      {
+        code: 80,
+        ignoreComments: true,
+        ignoreTrailingComments: true,
+        ignoreUrls: true,
+        ignoreStrings: true,
+        ignoreTemplateLiterals: true,
+      },
+    ],
   },
 };
