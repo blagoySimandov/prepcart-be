@@ -23,7 +23,7 @@ const PRODUCTS_COLLECTION = "products";
 // Helper function to generate embeddings for shopping list items
 const generateEmbedding = async (
   text: string,
-  ai: GoogleGenAI,
+  ai: GoogleGenAI
 ): Promise<number[]> => {
   const result = await ai.models.embedContent({
     model: EMBEDDING_MODEL,
@@ -43,7 +43,7 @@ const searchSimilarProducts = async (
   queryEmbedding: number[],
   country?: string,
   storeIds?: string[],
-  maxResults = 10,
+  maxResults = 10
 ): Promise<ProductCandidate[]> => {
   const collection = db.collection(PRODUCTS_COLLECTION);
 
@@ -104,7 +104,7 @@ const searchSimilarProducts = async (
 const matchWithGemini = async (
   shoppingItem: string,
   candidates: ProductCandidate[],
-  ai: GoogleGenAI,
+  ai: GoogleGenAI
 ): Promise<MatchedProduct[]> => {
   if (candidates.length === 0) return [];
 
@@ -115,7 +115,7 @@ const matchWithGemini = async (
           c.price_before_discount_local
         } ${c.currency_local}, Store: ${
           c.store_id
-        }, Similarity: ${c.similarity_score.toFixed(3)})`,
+        }, Similarity: ${c.similarity_score.toFixed(3)})`
     )
     .join("\n");
 
@@ -252,7 +252,7 @@ export const matchShoppingList = onRequest(
             embedding,
             requestData.country,
             requestData.store_ids,
-            maxResultsPerItem,
+            maxResultsPerItem
           );
 
           logger.info("Found candidates", {
@@ -329,5 +329,5 @@ export const matchShoppingList = onRequest(
         details: error instanceof Error ? error.message : "Unknown error",
       });
     }
-  },
+  }
 );

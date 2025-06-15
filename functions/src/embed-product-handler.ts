@@ -1,6 +1,6 @@
 /* eslint-disable operator-linebreak */
 import { onTaskDispatched } from "firebase-functions/v2/tasks";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { GoogleGenAI } from "@google/genai";
 import { logger } from "firebase-functions/v2";
 import { defineSecret } from "firebase-functions/params";
@@ -47,11 +47,14 @@ export const onProductEmbed = onTaskDispatched<Product>(
         throw new Error("API response did not contain an embedding.");
       }
 
-      // Store embedding directly in Firestore
-      await db.collection(PRODUCTS_COLLECTION).doc(id).update({
-        embedding: embedding,
-        isEmbedded: true,
-      });
+      // Store embedding as a proper Firestore vector for vector search
+      await db
+        .collection(PRODUCTS_COLLECTION)
+        .doc(id)
+        .update({
+          embedding: FieldValue.vector(embedding),
+          isEmbedded: true,
+        });
 
       logger.info("Successfully processed embedding for product:", {
         productId: id,
