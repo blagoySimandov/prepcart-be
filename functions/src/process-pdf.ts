@@ -1,16 +1,16 @@
 import { onObjectFinalized } from "firebase-functions/v2/storage";
-import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import { GoogleGenAI } from "@google/genai";
 import { logger } from "firebase-functions/v2";
 import { defineSecret } from "firebase-functions/params";
-import { AnalysisResult, PdfAnalysisResult } from "./types";
+import { AnalysisResult, Product, DiscountDetails } from "./types";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { initializeAppIfNeeded } from "./firebase";
 
-initializeApp();
+initializeAppIfNeeded();
 
 const API_KEY_SECRET = defineSecret("API_KEY");
 const db = getFirestore();
@@ -18,36 +18,40 @@ const db = getFirestore();
 const MODEL_NAME = "gemini-2.5-flash-preview-05-20";
 const TARGET_STORAGE_BUCKET =
   process.env.GCLOUD_PROJECT + ".firebasestorage.app";
-const PDF_ANALYSIS_COLLECTION = "pdfAnalysisResults";
+const PRODUCTS_COLLECTION = "products";
 
-const PROMPT_FOR_PDF_ANALYSIS = `
-Task: Extract all products that have a discount from the provided content.
- Output Format: Return a JSON object with the following structure:
- <json example>
- {
- "discounted_products": [
- {
- "product_name": "string",               // Detailed product name in English
- "price_before_discount_local": number,     // Price before discount in local currency
- "currency_local": "string",                // Local currency (e.g. "BGN", "HUF", "RON")
- "price_before_discount_eur": number,       // Price before discount converted to Euro
- "discount_percent": number,                // Discount amount as a number (e.g. 25 for 25%)
- "page_number": number                      // Page number where the product appears
- },
- ...
- ]
- }
- </json example>
- Requirements:
- 
- Include only products that have a clear discount.
- 
- Ensure all fields are filled where information is available.
- 
- Translate product names into English with as much detail as possible.
+const PROMPT_FOR_DISCOUNT_EXTRACTION = `
+Task: Extract all products that have a clear discount from the provided content.
+Output Format: Return a JSON object with a "discounted_products" key.
+<json example>
+{
+  "discounted_products": [
+    {
+      "product_name": "string",
+      "price_before_discount_local": number,
+      "currency_local": "string", // e.g. "EUR", "BGN", "USD", "GBP"
+      "discount_percent": number,
+      "page_number": number
+    },
+    ...
+  ]
+}
+</json example>
+
+Requirements:
+- Include only products with a clear, stated discount percentage
+- The "discount_percent" field MUST be an integer. If you see a decimal, round it to the nearest whole number
+- Use the EXACT price as shown in the PDF in its original currency for "price_before_discount_local"
+- Use the correct currency code (EUR, BGN, USD, GBP, etc.) for "currency_local"
+- Ensure all fields are filled where information is available
+- Ensure product names are in the language of the PDF
+- Round prices to 2 decimal places
 `;
 
-const processPdf = async (fileName: string, ai: GoogleGenAI) => {
+const extractDiscountsFromPdf = async (
+  fileName: string,
+  ai: GoogleGenAI
+): Promise<DiscountDetails[]> => {
   const bucket = getStorage().bucket(TARGET_STORAGE_BUCKET);
   const tempFilePath = path.join(os.tmpdir(), path.basename(fileName));
 
@@ -55,17 +59,11 @@ const processPdf = async (fileName: string, ai: GoogleGenAI) => {
     logger.info(`Downloading file from Storage: ${fileName}`);
     await bucket.file(fileName).download({ destination: tempFilePath });
 
-    logger.info(`Uploading file to Gemini Files API: ${tempFilePath}`);
     const uploadedFile = await ai.files.upload({
       file: tempFilePath,
       config: { mimeType: "application/pdf" },
     });
-
     logger.info(`File uploaded to Gemini. URI: ${uploadedFile.uri}`);
-
-    if (!uploadedFile.uri) {
-      throw new Error("Failed to get file URI from uploaded file");
-    }
 
     const result = await ai.models.generateContent({
       model: MODEL_NAME,
@@ -73,9 +71,7 @@ const processPdf = async (fileName: string, ai: GoogleGenAI) => {
         {
           role: "user",
           parts: [
-            {
-              text: PROMPT_FOR_PDF_ANALYSIS,
-            },
+            { text: PROMPT_FOR_DISCOUNT_EXTRACTION },
             {
               fileData: {
                 mimeType: "application/pdf",
@@ -85,160 +81,112 @@ const processPdf = async (fileName: string, ai: GoogleGenAI) => {
           ],
         },
       ],
-      config: {
-        responseMimeType: "application/json",
-      },
+      config: { responseMimeType: "application/json" },
     });
 
-    if (fs.existsSync(tempFilePath)) {
-      fs.unlinkSync(tempFilePath);
-      logger.info(`Cleaned up temporary file: ${tempFilePath}`);
+    const responseText = result.text;
+    if (!responseText) {
+      throw new Error(
+        "Gemini API returned no text content for discount extraction."
+      );
     }
-    // NOTE: The uploaded file is auto-deleted after 48 hours
-    try {
-      if (uploadedFile.name) {
-        await ai.files.delete({ name: uploadedFile.name });
-        logger.info(
-          `Cleaned up uploaded file from Gemini: ${uploadedFile.name}`,
-        );
-      }
-    } catch (deleteError) {
-      logger.warn(`Could not delete uploaded file: ${deleteError}`);
-    }
-
-    return result;
-  } catch (error) {
-    if (fs.existsSync(tempFilePath)) {
-      fs.unlinkSync(tempFilePath);
-      logger.info(`Cleaned up temporary file after error: ${tempFilePath}`);
-    }
-    throw error;
+    const { discounted_products: discountedProducts }: AnalysisResult =
+      JSON.parse(responseText);
+    return discountedProducts || [];
+  } finally {
+    if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
   }
-};
-const filePathToURI = (filePath: string) => {
-  const bucket = getStorage().bucket(TARGET_STORAGE_BUCKET);
-  return bucket.file(filePath).toString();
 };
 
 export const processPdfOnUpload = onObjectFinalized(
   {
-    memory: "512MiB",
-    timeoutSeconds: 240,
+    memory: "1GiB",
+    timeoutSeconds: 300,
     secrets: [API_KEY_SECRET],
     region: "europe-west1",
   },
   async (event) => {
-    const object = event.data;
-    const fileBucket = object.bucket;
-    const filePath = object.name;
+    const { name: filePath, contentType } = event.data;
 
-    if (!filePath.startsWith("brochures/")) {
-      logger.info("File is not under the 'brochures/' folder. Skipping.", {
+    if (
+      !filePath.startsWith("brochures/") ||
+      !contentType?.startsWith("application/pdf")
+    ) {
+      logger.info("File is not a processable PDF brochure. Skipping.", {
         filePath,
       });
       return;
     }
 
-    const contentType = object.contentType;
-    if (!contentType || !contentType.startsWith("application/pdf")) {
-      logger.info("This is not a PDF file.", { filePath, contentType });
-      return;
-    }
+    const pathParts = filePath.split("/");
+    const fileName = pathParts[pathParts.length - 1];
+    const storeInfo = fileName.replace(".pdf", "").split("_");
+    const storeId = storeInfo[0];
+    const country = storeInfo[1];
 
-    logger.info("Processing PDF file:", { filePath });
+    logger.info("Processing PDF for discount extraction:", { filePath });
 
     try {
       const apiKey = API_KEY_SECRET.value();
-      if (!apiKey) {
-        throw new Error("API_KEY secret is not configured");
-      }
+      if (!apiKey) throw new Error("API_KEY secret is not configured");
 
       const ai = new GoogleGenAI({ apiKey });
 
-      const result = await processPdf(filePath, ai);
-      logger.info("Received response from Gemini API.");
+      // Archive old products for this store in Firestore
+      const oldProductsQuery = await db
+        .collection(PRODUCTS_COLLECTION)
+        .where("storeId", "==", storeId)
+        .where("archivedAt", "==", null)
+        .get();
 
-      const geminiResponseText = result.text;
-
-      if (!geminiResponseText) {
-        logger.warn("Gemini API returned no text content for:", { filePath });
-
-        const noTextResult: PdfAnalysisResult = {
-          fileUri: filePathToURI(filePath),
-          bucket: fileBucket,
-          status: "completed_no_text_response",
-          timestamp: FieldValue.serverTimestamp(),
-          errorMessage: "Gemini API returned no text content.",
-        };
-
-        await db.collection(PDF_ANALYSIS_COLLECTION).add(noTextResult);
-        logger.info("Stored no-text response indicator in Firestore for:", {
-          filePath,
+      if (!oldProductsQuery.empty) {
+        const archiveBatch = db.batch();
+        oldProductsQuery.docs.forEach((doc) => {
+          archiveBatch.update(doc.ref, {
+            archivedAt: FieldValue.serverTimestamp(),
+          });
         });
+        await archiveBatch.commit();
+        logger.info(
+          `Archived ${oldProductsQuery.size} old products in Firestore for store: ${storeId}`
+        );
+      }
+
+      const products = await extractDiscountsFromPdf(filePath, ai);
+      if (products.length === 0) {
+        logger.info("No discounted products found in the PDF.", { filePath });
         return;
       }
-      let structuredData: AnalysisResult;
-      try {
-        structuredData = JSON.parse(geminiResponseText);
-        logger.info("Successfully extracted text. Storing in Firestore...");
-      } catch (error: any) {
-        logger.error("Error parsing extracted text:", {
-          filePath,
-          error: error.message,
-        });
-        const errorResult: PdfAnalysisResult = {
-          fileUri: filePathToURI(filePath),
-          bucket: fileBucket,
-          status: "error",
-          errorMessage: "Error parsing extracted text.",
-          errorDetails: error.toString(),
-          timestamp: FieldValue.serverTimestamp(),
+      logger.info(`Extracted ${products.length} discounted products.`);
+
+      // Save each product as a new document
+      const firestoreBatch = db.batch();
+      products.forEach((productDetails, index) => {
+        const docId = `${event.id}_${index}`;
+        const docRef = db.collection(PRODUCTS_COLLECTION).doc(docId);
+        const newProduct: Product = {
+          id: docId,
+          sourceFileUri: `gs://${TARGET_STORAGE_BUCKET}/${filePath}`,
+          storeId,
+          country,
+          isEmbedded: false,
+          createdAt: FieldValue.serverTimestamp(),
+          archivedAt: null,
+          discount: productDetails,
+          // embedding will be added later by the embedding task
         };
-        await db.collection(PDF_ANALYSIS_COLLECTION).add(errorResult);
-        logger.info("Error details stored in Firestore for:", { filePath });
-        return;
-      }
-      logger.info("Successfully extracted text. Storing in Firestore...");
-
-      const successResult: PdfAnalysisResult = {
-        fileUri: filePathToURI(filePath),
-        bucket: fileBucket,
-        status: "completed",
-        extractedData: structuredData,
-        timestamp: FieldValue.serverTimestamp(),
-      };
-
-      await db.collection(PDF_ANALYSIS_COLLECTION).add(successResult);
-      logger.info("PDF analysis results stored in Firestore for:", {
-        filePath,
+        firestoreBatch.set(docRef, newProduct);
       });
+
+      await firestoreBatch.commit();
+      logger.info(
+        `Successfully stored ${products.length} new products in Firestore.`
+      );
     } catch (error: any) {
-      logger.error("Error processing PDF file:", {
+      logger.error("FATAL: Error processing PDF for discount extraction:", {
         filePath,
         error: error.message,
       });
-
-      try {
-        const errorResult: PdfAnalysisResult = {
-          fileUri: filePathToURI(filePath),
-          bucket: fileBucket,
-          status: "error",
-          errorMessage: error.message,
-          errorDetails: error.toString(),
-          timestamp: FieldValue.serverTimestamp(),
-        };
-
-        await db.collection(PDF_ANALYSIS_COLLECTION).add(errorResult);
-        logger.info("Error details stored in Firestore for:", { filePath });
-      } catch (firestoreError: any) {
-        logger.error(
-          "FATAL ERROR: Could not store error details in Firestore for:",
-          {
-            filePath,
-            firestoreError: firestoreError.message,
-          },
-        );
-      }
     }
-  },
+  }
 );
