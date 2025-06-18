@@ -18,14 +18,14 @@ export const classifyInput = onCall(
     if (!text) {
       throw new https.HttpsError(
         "invalid-argument",
-        "The function must be called with one argument 'text' containing the text to classify."
+        "The function must be called with one argument 'text' containing the text to classify.",
       );
     }
 
     if (!apiKey) {
       throw new https.HttpsError(
         "failed-precondition",
-        "The API key is not configured."
+        "The API key is not configured.",
       );
     }
 
@@ -59,8 +59,8 @@ Output:`;
       throw new https.HttpsError(
         "internal",
         "Failed to classify input.",
-        error instanceof Error ? error.message : "Unknown error"
+        error instanceof Error ? error.message : "Unknown error",
       );
     }
-  }
+  },
 );

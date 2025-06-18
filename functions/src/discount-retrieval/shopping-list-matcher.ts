@@ -10,14 +10,16 @@ import {
 import { initializeAppIfNeeded } from "../util/firebase";
 import { searchSimilarProducts } from "./database";
 import {
-  generateEmbedding,
   calculateSavingsWithGemini,
   batchMatchWithGemini,
+  batchGenerateEmbeddings,
 } from "./gemini";
+import { translateShoppingList } from "./translation";
 
 initializeAppIfNeeded();
 
 const API_KEY_SECRET = defineSecret("API_KEY");
+const DISCOUNT_LANGUAGE = "BG";
 
 export const matchShoppingList = onRequest(
   {
@@ -63,6 +65,20 @@ export const matchShoppingList = onRequest(
         storeIds: requestData.store_ids,
       });
 
+      const translationMap = await translateShoppingList(
+        requestData.shopping_list,
+        DISCOUNT_LANGUAGE,
+        ai,
+      );
+
+      const allTranslatedItems = [
+        ...new Set(Array.from(translationMap.values())),
+      ];
+      const embeddingMap = await batchGenerateEmbeddings(
+        allTranslatedItems,
+        ai,
+      );
+
       const itemsWithCandidates: {
         item: string;
         candidates: ProductCandidate[];
@@ -72,14 +88,23 @@ export const matchShoppingList = onRequest(
         const itemText = shoppingItem.item.trim();
         if (!itemText) continue;
 
-        try {
-          const embedding = await generateEmbedding(itemText, ai);
+        const translatedItemText = translationMap.get(itemText) || itemText;
+        const embedding = embeddingMap.get(translatedItemText);
 
+        if (!embedding) {
+          logger.warn("Could not find embedding for item.", {
+            item: itemText,
+            translatedItem: translatedItemText,
+          });
+          continue;
+        }
+
+        try {
           const candidates = await searchSimilarProducts(
             embedding,
             requestData.country,
             requestData.store_ids,
-            maxResultsPerItem
+            maxResultsPerItem,
           );
 
           logger.info("Found candidates", {
@@ -101,18 +126,18 @@ export const matchShoppingList = onRequest(
       const allMatches = await batchMatchWithGemini(itemsWithCandidates, ai);
 
       const matchedShoppingItems = new Set(
-        allMatches.map((m) => m.shopping_list_item)
+        allMatches.map((m) => m.shopping_list_item),
       );
       const allShoppingItems = requestData.shopping_list
         .map((i) => i.item.trim())
         .filter(Boolean);
       const unmatchedItems = allShoppingItems.filter(
-        (item) => !matchedShoppingItems.has(item)
+        (item) => !matchedShoppingItems.has(item),
       );
 
       const savingsByCurrency = await calculateSavingsWithGemini(
         allMatches,
-        ai
+        ai,
       );
 
       const processingTimeMs = Date.now() - startTime;
@@ -141,5 +166,5 @@ export const matchShoppingList = onRequest(
         details: error instanceof Error ? error.message : "Unknown error",
       });
     }
-  }
+  },
 );

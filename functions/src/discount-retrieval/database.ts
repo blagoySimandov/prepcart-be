@@ -9,7 +9,7 @@ export const searchSimilarProducts = async (
   queryEmbedding: number[],
   country?: string,
   storeIds?: string[],
-  maxResults = 10
+  maxResults = 10,
 ): Promise<ProductCandidate[]> => {
   const collection = db.collection(PRODUCTS_COLLECTION);
 

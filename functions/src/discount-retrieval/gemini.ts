@@ -8,29 +8,45 @@ import {
 import { calculateSavingsLocally } from "./savings";
 
 const EMBEDDING_MODEL = "text-embedding-004";
-const MODEL_NAME = "gemini-2.0-flash-lite";
+const MODEL_NAME = "gemini-2.5-flash-lite-preview-06-17";
 const CHEAP_MODEL_NAME = "gemini-2.0-flash-lite";
 
-export const generateEmbedding = async (
-  text: string,
-  ai: GoogleGenAI
-): Promise<number[]> => {
+export const batchGenerateEmbeddings = async (
+  texts: string[],
+  ai: GoogleGenAI,
+): Promise<Map<string, number[]>> => {
+  if (texts.length === 0) {
+    return new Map();
+  }
+
   const result = await ai.models.embedContent({
     model: EMBEDDING_MODEL,
-    contents: [{ parts: [{ text }] }],
+    contents: texts.map((text) => ({ parts: [{ text }] })),
     config: { taskType: "RETRIEVAL_QUERY" },
   });
 
-  const embedding = result.embeddings?.[0]?.values;
-  if (!embedding || embedding.length === 0) {
-    throw new Error(`Failed to generate embedding for: ${text}`);
+  const embeddings = result.embeddings;
+  if (!embeddings || embeddings.length !== texts.length) {
+    throw new Error("Mismatch in batch embedding response count.");
   }
-  return embedding;
+
+  const embeddingMap = new Map<string, number[]>();
+  embeddings.forEach((contentEmbedding, i) => {
+    const text = texts[i];
+    const embedding = contentEmbedding.values;
+    if (embedding && embedding.length > 0) {
+      embeddingMap.set(text, embedding);
+    } else {
+      logger.warn(`Failed to generate embedding for: ${text}`);
+    }
+  });
+
+  return embeddingMap;
 };
 
 const calculateAmbiguousSavingsWithGemini = async (
   ambiguousMatches: MatchedProduct[],
-  ai: GoogleGenAI
+  ai: GoogleGenAI,
 ): Promise<{
   savings_by_currency: { [currency: string]: number };
   calculation_details: SavingsCalculationDetail[];
@@ -89,7 +105,7 @@ Output Format (JSON):
   const responseText = result.text;
   if (!responseText) {
     logger.warn(
-      "Gemini returned no response for ambiguous savings calculation"
+      "Gemini returned no response for ambiguous savings calculation",
     );
     return { savings_by_currency: {}, calculation_details: [] };
   }
@@ -100,7 +116,7 @@ Output Format (JSON):
       (detail: any) => ({
         ...detail,
         used_local_calculation: false,
-      })
+      }),
     );
 
     logger.info("Gemini ambiguous savings calculation details", { details });
@@ -120,7 +136,7 @@ Output Format (JSON):
 
 export const calculateSavingsWithGemini = async (
   matches: MatchedProduct[],
-  ai: GoogleGenAI
+  ai: GoogleGenAI,
 ): Promise<{ [currency: string]: number }> => {
   if (matches.length === 0) return {};
 
@@ -128,7 +144,7 @@ export const calculateSavingsWithGemini = async (
 
   const geminiResult = await calculateAmbiguousSavingsWithGemini(
     localResult.ambiguous_matches,
-    ai
+    ai,
   );
 
   const finalSavingsByCurrency = { ...localResult.savings_by_currency };
@@ -141,7 +157,7 @@ export const calculateSavingsWithGemini = async (
       finalSavingsByCurrency[currency] += savings;
       finalSavingsByCurrency[currency] =
         Math.round(finalSavingsByCurrency[currency] * 100) / 100;
-    }
+    },
   );
 
   const allDetails = [
@@ -167,7 +183,7 @@ export const calculateSavingsWithGemini = async (
 
 export const batchMatchWithGemini = async (
   itemsWithCandidates: { item: string; candidates: ProductCandidate[] }[],
-  ai: GoogleGenAI
+  ai: GoogleGenAI,
 ): Promise<MatchedProduct[]> => {
   if (itemsWithCandidates.length === 0) {
     return [];
@@ -199,7 +215,7 @@ ${JSON.stringify(promptData, null, 2)}
 
 Instructions:
 1. For each shopping list item, evaluate its candidates to find the single best match.
-2. A match is valid ONLY if the product is a good fit for the shopping list item. Consider all attributes.
+2. A match is valid ONLY if the product is a good fit for discounting the shopping list item. Consider all attributes.
 3. The 'similarity_score' is a hint, but use your judgment.
 4. Only return a match if your confidence is 60 or higher (out of 100).
 5. If no candidate is a good match, do not include it in your response.
@@ -252,7 +268,7 @@ Output Format (JSON Array):
           "Gemini returned a match for a candidate_id that was not found",
           {
             response_item: item,
-          }
+          },
         );
       }
     }
