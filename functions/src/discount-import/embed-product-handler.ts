@@ -4,8 +4,8 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { GoogleGenAI } from "@google/genai";
 import { logger } from "firebase-functions/v2";
 import { defineSecret } from "firebase-functions/params";
+import { initializeAppIfNeeded } from "../util/firebase";
 import { Product } from "./types";
-import { initializeAppIfNeeded } from "./firebase";
 
 initializeAppIfNeeded();
 
@@ -47,7 +47,6 @@ export const onProductEmbed = onTaskDispatched<Product>(
         throw new Error("API response did not contain an embedding.");
       }
 
-      // Store embedding as a proper Firestore vector for vector search
       await db
         .collection(PRODUCTS_COLLECTION)
         .doc(id)
@@ -69,5 +68,5 @@ export const onProductEmbed = onTaskDispatched<Product>(
       });
       throw error;
     }
-  }
+  },
 );

@@ -4,11 +4,11 @@ import { getStorage } from "firebase-admin/storage";
 import { GoogleGenAI } from "@google/genai";
 import { logger } from "firebase-functions/v2";
 import { defineSecret } from "firebase-functions/params";
-import { AnalysisResult, Product, DiscountDetails } from "./types";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { initializeAppIfNeeded } from "./firebase";
+import { initializeAppIfNeeded } from "../util/firebase";
+import { DiscountDetails, AnalysisResult, Product } from "./types";
 
 initializeAppIfNeeded();
 
@@ -30,6 +30,8 @@ Output Format: Return a JSON object with a "discounted_products" key.
       "product_name": "string",
       "price_before_discount_local": number,
       "currency_local": "string", // e.g. "EUR", "BGN", "USD", "GBP"
+      "quantity": string, // The quantity for which the product is priced at. e.g. "1 pcs", "1 kg"  or "1 bottle"
+      "active_until": string, // The date until which the discount is active. e.g. "2023-01-01"
       "discount_percent": number,
       "page_number": number
     },
@@ -50,7 +52,7 @@ Requirements:
 
 const extractDiscountsFromPdf = async (
   fileName: string,
-  ai: GoogleGenAI
+  ai: GoogleGenAI,
 ): Promise<DiscountDetails[]> => {
   const bucket = getStorage().bucket(TARGET_STORAGE_BUCKET);
   const tempFilePath = path.join(os.tmpdir(), path.basename(fileName));
@@ -87,7 +89,7 @@ const extractDiscountsFromPdf = async (
     const responseText = result.text;
     if (!responseText) {
       throw new Error(
-        "Gemini API returned no text content for discount extraction."
+        "Gemini API returned no text content for discount extraction.",
       );
     }
     const { discounted_products: discountedProducts }: AnalysisResult =
@@ -148,7 +150,7 @@ export const processPdfOnUpload = onObjectFinalized(
         });
         await archiveBatch.commit();
         logger.info(
-          `Archived ${oldProductsQuery.size} old products in Firestore for store: ${storeId}`
+          `Archived ${oldProductsQuery.size} old products in Firestore for store: ${storeId}`,
         );
       }
 
@@ -159,7 +161,6 @@ export const processPdfOnUpload = onObjectFinalized(
       }
       logger.info(`Extracted ${products.length} discounted products.`);
 
-      // Save each product as a new document
       const firestoreBatch = db.batch();
       products.forEach((productDetails, index) => {
         const docId = `${event.id}_${index}`;
@@ -173,14 +174,13 @@ export const processPdfOnUpload = onObjectFinalized(
           createdAt: FieldValue.serverTimestamp(),
           archivedAt: null,
           discount: productDetails,
-          // embedding will be added later by the embedding task
         };
         firestoreBatch.set(docRef, newProduct);
       });
 
       await firestoreBatch.commit();
       logger.info(
-        `Successfully stored ${products.length} new products in Firestore.`
+        `Successfully stored ${products.length} new products in Firestore.`,
       );
     } catch (error: any) {
       logger.error("FATAL: Error processing PDF for discount extraction:", {
@@ -188,5 +188,5 @@ export const processPdfOnUpload = onObjectFinalized(
         error: error.message,
       });
     }
-  }
+  },
 );

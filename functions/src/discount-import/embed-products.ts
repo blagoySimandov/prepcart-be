@@ -1,8 +1,8 @@
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { getFunctions } from "firebase-admin/functions";
 import { logger } from "firebase-functions/v2";
+import { initializeAppIfNeeded } from "../util/firebase";
 import { Product } from "./types";
-import { initializeAppIfNeeded } from "./firebase";
 
 initializeAppIfNeeded();
 
@@ -34,5 +34,5 @@ export const enqueueProductForEmbedding = onDocumentCreated(
         error: error instanceof Error ? error.message : "Unknown error",
       });
     }
-  }
+  },
 );

@@ -1,11 +1,15 @@
-import { processPdfOnUpload } from "./process-pdf";
 import { scrapeUrl } from "./scrape";
-import { enqueueProductForEmbedding } from "./embed-products";
-import { onProductEmbed } from "./embed-product-handler";
-import { matchShoppingList } from "./shopping-list-matcher";
+import { onProductEmbed } from "./discount-import/embed-product-handler";
+import { enqueueProductForEmbedding } from "./discount-import/embed-products";
+import { processPdfOnUpload } from "./discount-import/process-pdf";
+import { matchShoppingList } from "./discount-retrieval/shopping-list-matcher";
+import { autocomplete } from "./autocomplete";
+import { classifyInput } from "./classify-input";
 
 exports.processPdfOnUpload = processPdfOnUpload;
 exports.scrapeUrl = scrapeUrl;
 exports.enqueueProductForEmbedding = enqueueProductForEmbedding;
 exports.onProductEmbed = onProductEmbed;
 exports.matchShoppingList = matchShoppingList;
+exports.autocomplete = autocomplete;
+exports.classifyInput = classifyInput;
