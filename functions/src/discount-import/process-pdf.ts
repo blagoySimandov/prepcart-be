@@ -52,7 +52,7 @@ Requirements:
 
 const extractDiscountsFromPdf = async (
   fileName: string,
-  ai: GoogleGenAI,
+  ai: GoogleGenAI
 ): Promise<DiscountDetails[]> => {
   const bucket = getStorage().bucket(TARGET_STORAGE_BUCKET);
   const tempFilePath = path.join(os.tmpdir(), path.basename(fileName));
@@ -89,7 +89,7 @@ const extractDiscountsFromPdf = async (
     const responseText = result.text;
     if (!responseText) {
       throw new Error(
-        "Gemini API returned no text content for discount extraction.",
+        "Gemini API returned no text content for discount extraction."
       );
     }
     const { discounted_products: discountedProducts }: AnalysisResult =
@@ -125,6 +125,16 @@ export const processPdfOnUpload = onObjectFinalized(
     const storeInfo = fileName.replace(".pdf", "").split("_");
     const storeId = storeInfo[0];
     const country = storeInfo[1];
+    const startDateStr = storeInfo[2];
+    const endDateStr = storeInfo[3];
+
+    const parseDate = (dateStr: string) => {
+      const [day, month, year] = dateStr.split(".").map(Number);
+      return new Date(year, month - 1, day);
+    };
+
+    const validFrom = parseDate(startDateStr);
+    const validUntil = parseDate(endDateStr);
 
     logger.info("Processing PDF for discount extraction:", { filePath });
 
@@ -150,7 +160,7 @@ export const processPdfOnUpload = onObjectFinalized(
         });
         await archiveBatch.commit();
         logger.info(
-          `Archived ${oldProductsQuery.size} old products in Firestore for store: ${storeId}`,
+          `Archived ${oldProductsQuery.size} old products in Firestore for store: ${storeId}`
         );
       }
 
@@ -170,6 +180,8 @@ export const processPdfOnUpload = onObjectFinalized(
           sourceFileUri: `gs://${TARGET_STORAGE_BUCKET}/${filePath}`,
           storeId,
           country,
+          valid_from: validFrom,
+          valid_until: validUntil,
           isEmbedded: false,
           createdAt: FieldValue.serverTimestamp(),
           archivedAt: null,
@@ -180,7 +192,7 @@ export const processPdfOnUpload = onObjectFinalized(
 
       await firestoreBatch.commit();
       logger.info(
-        `Successfully stored ${products.length} new products in Firestore.`,
+        `Successfully stored ${products.length} new products in Firestore.`
       );
     } catch (error: any) {
       logger.error("FATAL: Error processing PDF for discount extraction:", {
@@ -188,5 +200,5 @@ export const processPdfOnUpload = onObjectFinalized(
         error: error.message,
       });
     }
-  },
+  }
 );

@@ -18,6 +18,8 @@ export interface Product {
   sourceFileUri: string;
   storeId: string;
   country: string;
+  valid_from: Date;
+  valid_until: Date;
   isEmbedded: boolean;
   createdAt: FieldValue;
   archivedAt: FieldValue | null;

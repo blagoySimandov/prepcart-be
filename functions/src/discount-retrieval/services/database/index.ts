@@ -1,6 +1,6 @@
 import { getFirestore } from "firebase-admin/firestore";
 import { logger } from "firebase-functions/v2";
-import { ProductCandidate } from "./types";
+import { ProductCandidate } from "../../types";
 
 const db = getFirestore();
 const PRODUCTS_COLLECTION = "products";

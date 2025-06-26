@@ -1,18 +1,24 @@
 import { GoogleGenAI } from "@google/genai";
 import { logger } from "firebase-functions/v2";
-import { ShoppingListItem } from "./types";
-
-const MODEL_NAME = "gemini-2.0-flash-lite";
+import { ShoppingListItem } from "../../types";
+import { MODEL_NAME } from "../../constants";
 
 export const translateShoppingList = async (
   shoppingList: ShoppingListItem[],
   targetLanguage: string,
-  ai: GoogleGenAI,
+  ai: GoogleGenAI
 ): Promise<Map<string, string>> => {
   const itemsToTranslate = shoppingList.map((item) => item.item);
   const prompt = `
 Translate the following shopping list items to ${targetLanguage}.
 Return a JSON object where keys are the original items and values are the translations.
+
+Example Output for language BG:
+{
+  "Wine 2 bottles": "Вино 2 бутилки",
+  "Meat": "Месо",
+  "Milk": "Мляко"
+}
 
 Items:
 ${JSON.stringify(itemsToTranslate)}
