@@ -1,20 +1,17 @@
 import { GoogleGenAI } from "@google/genai";
 import { logger } from "firebase-functions/v2";
-import {
-  MatchedProduct,
-  ProductCandidate,
-  ShoppingListItem,
-} from "../../types";
+import { MatchedProduct, ShoppingListItem } from "../../types";
 import {
   CHEAP_MODEL_NAME,
   DEFAULT_PREFFERED_CURRENCY,
   EMBEDDING_MODEL,
   MODEL_NAME,
 } from "../../constants";
+import { ProductCandidate } from "../../../util/types";
 
 export const batchGenerateEmbeddings = async (
   texts: string[],
-  ai: GoogleGenAI
+  ai: GoogleGenAI,
 ): Promise<Map<string, number[]>> => {
   if (texts.length === 0) {
     return new Map();
@@ -47,62 +44,55 @@ export const batchGenerateEmbeddings = async (
 
 type CalculateSavingsReturn = Promise<{
   savings_by_currency: { [currency: string]: number };
-  explanation: string;
 }>;
 
 const calculateSavings = async (
   matches: MatchedProduct[],
   prefferedCurrency: string,
-  ai: GoogleGenAI
+  ai: GoogleGenAI,
 ): CalculateSavingsReturn => {
   if (matches.length === 0) {
-    return { savings_by_currency: {}, explanation: "" };
+    return { savings_by_currency: {} };
   }
 
   const matchesData = matches
-    .map((match) => {
+    .map((match, index) => {
       const bestProduct = match.matched_products[0];
       if (!bestProduct) return null;
 
       return {
+        id: index.toString(),
         shopping_item: match.shopping_list_item,
         product_name: bestProduct.product_name,
-        price_before_discount: bestProduct.price_before_discount_local,
-        currency: bestProduct.currency_local,
-        discount_percent: bestProduct.discount_percent,
         product_quantity: bestProduct.quantity || "1 pcs",
-        confidence_score: bestProduct.confidence_score,
       };
     })
     .filter(Boolean);
 
-  logger.info("Calculating total potential savings", {
+  logger.info("Requesting quantity multipliers from Gemini", {
     matchesData,
   });
 
   const prompt = `
-Task: Calculate total potential savings from matched shopping list items, taking into account the requested quantity from the shopping list.
+Task: For each shopping list item, determine the quantity multiplier needed to calculate savings.
 
-Matched Products Data:
+Shopping Items and Product Data:
 ${JSON.stringify(matchesData, null, 2)}
 
 Instructions:
-1. For each match, calculate base savings = (price_before_discount * discount_percent / 100). This is the savings for a single unit of the product.
-2. The shopping_item contains the user's request with quantity information (e.g., {"item": "Wine", "quantity": 2, "unit": undefined})
-3. The product_quantity describes what the discount price applies to (e.g., "1 bottle", "500g", "1 pcs")
-4. Determine the quantity_multiplier based on the user's requested quantity. For example, if the user wants 2 bottles of wine and the discount is for 1 bottle, the multiplier is 2. The multiplier can also be less than one. For example, if the discount is for 1kg and the user wants 500g, the quantity_multiplier should be 0.5.
-5. Use your best judgment to interpret quantities and units when they don't match exactly.
-6. Return the base_savings and quantity_multiplier for each item. Do not calculate the final total savings.
+1.  The shopping_item contains the user's request with quantity information (e.g., {"item": "Cheese", "quantity": 500, "unit": "g"})
+2.  The product_quantity describes what the discount price applies to (e.g., "1 bottle", "1 kg", "1 package")
+3.  Determine the quantity_multiplier based on the user's requested quantity.
+    *   Be very careful with weight conversions. For example, if the user wants 500g and the discount is for 1kg, the quantity_multiplier is 0.5.
+    *   If the product_quantity is ambiguous (e.g., "per package", "1 piece") and the user requests a specific weight (e.g., 500g), you must estimate the weight of the package. Use your knowledge to make a reasonable guess (e.g., a standard package of sliced cheese might be 150g).
+4.  Use your best judgment to interpret quantities and units in other cases where they don't match exactly.
 
 Output Format (JSON):
 {
-  "calculation_details": [
+  "quantity_calculations": [
     {
-      "shopping_item": "string representation of the item",
-      "product_name": "string",
-      "base_savings": number,
-      "quantity_multiplier": number,
-      "currency": "string"
+      "id": "The id of the item from the input",
+      "quantity_multiplier": number
     }
   ]
 }
@@ -117,24 +107,52 @@ Output Format (JSON):
   const responseText = result.text;
   if (!responseText) {
     logger.warn("Gemini returned no response for savings calculation");
-    return { savings_by_currency: {}, explanation: "" };
+    return { savings_by_currency: {} };
   }
 
   try {
     const geminiResponse = JSON.parse(responseText);
-    logger.info("Gemini savings calculation response", { geminiResponse });
+    logger.info("Gemini quantity calculation response", { geminiResponse });
 
-    const savingsByCurrency: { [currency: string]: number } = {};
-    if (geminiResponse.calculation_details) {
-      for (const detail of geminiResponse.calculation_details) {
-        const totalSavings = detail.base_savings * detail.quantity_multiplier;
-        if (savingsByCurrency[detail.currency]) {
-          savingsByCurrency[detail.currency] += totalSavings;
-        } else {
-          savingsByCurrency[detail.currency] = totalSavings;
-        }
+    const quantityCalculations = new Map<
+      string,
+      { quantity_multiplier: number }
+    >();
+    if (geminiResponse.quantity_calculations) {
+      for (const detail of geminiResponse.quantity_calculations) {
+        quantityCalculations.set(detail.id, {
+          quantity_multiplier: detail.quantity_multiplier,
+        });
       }
     }
+
+    const savingsByCurrency: { [currency: string]: number } = {};
+
+    matches.forEach((match, index) => {
+      const bestProduct = match.matched_products[0];
+      if (!bestProduct) return;
+
+      const calc = quantityCalculations.get(index.toString());
+      if (!calc) {
+        logger.warn("Could not find quantity calculation for item", {
+          item: match.shopping_list_item.item,
+        });
+        return;
+      }
+
+      const baseSavings =
+        (bestProduct.price_before_discount_local *
+          bestProduct.discount_percent) /
+        100;
+      const totalSavings = baseSavings * calc.quantity_multiplier;
+      const currency = bestProduct.currency_local;
+
+      if (savingsByCurrency[currency]) {
+        savingsByCurrency[currency] += totalSavings;
+      } else {
+        savingsByCurrency[currency] = totalSavings;
+      }
+    });
 
     // Round to 2 decimal places
     for (const currency in savingsByCurrency) {
@@ -146,25 +164,23 @@ Output Format (JSON):
 
     return {
       savings_by_currency: savingsByCurrency,
-      explanation: "Total Savings = Sum(Base Product Savings * Quantity)",
     };
   } catch (error) {
     logger.error("Failed to parse Gemini savings response", {
       error: error instanceof Error ? error.message : "Unknown error",
       response: responseText,
     });
-    return { savings_by_currency: {}, explanation: "" };
+    return { savings_by_currency: {} };
   }
 };
 
 export const calculateSavingsWithGemini = async (
   matches: MatchedProduct[],
-  ai: GoogleGenAI
+  ai: GoogleGenAI,
 ): Promise<{
   savings_by_currency: { [currency: string]: number };
-  explanation: string;
 }> => {
-  if (matches.length === 0) return { savings_by_currency: {}, explanation: "" };
+  if (matches.length === 0) return { savings_by_currency: {} };
   const prefferedCurrency = DEFAULT_PREFFERED_CURRENCY;
   const result = await calculateSavings(matches, prefferedCurrency, ai);
   return result;
@@ -175,7 +191,7 @@ export const batchMatchWithGemini = async (
     shoppingItem: ShoppingListItem;
     candidates: ProductCandidate[];
   }[],
-  ai: GoogleGenAI
+  ai: GoogleGenAI,
 ): Promise<MatchedProduct[]> => {
   if (itemsWithCandidates.length === 0) {
     return [];
@@ -197,6 +213,7 @@ export const batchMatchWithGemini = async (
         quantity: c.quantity,
         store_id: c.store_id,
         similarity_score: c.similarity_score.toFixed(3),
+        requires_loyalty_card: c.requires_loyalty_card,
       })),
     };
   });
@@ -212,8 +229,9 @@ Instructions:
 2. A match is valid ONLY if the product is a good fit for discounting the shopping list item. Consider all attributes.
 3. The 'similarity_score' is a hint, but use your judgment.
 4. Pay attention to shopping_item_quantity and shopping_item_unit when evaluating matches.
-5. Only return a match if your confidence is 60 or higher (out of 100).
-6. If no candidate is a good match, do not include it in your response.
+5. Consider the 'requires_loyalty_card' field - this indicates whether the discount requires a loyalty/membership card.
+6. Only return a match if your confidence is 60 or higher (out of 100).
+7. If no candidate is a good match, do not include it in your response.
 
 Output Format (JSON Array):
 [
@@ -261,7 +279,7 @@ Output Format (JSON Array):
       }
 
       const originalShoppingItem = itemsWithCandidates.find(
-        (iwc) => iwc.shoppingItem.item === item.shopping_list_item
+        (iwc) => iwc.shoppingItem.item === item.shopping_list_item,
       )?.shoppingItem;
 
       if (!originalShoppingItem) {
@@ -285,7 +303,7 @@ Output Format (JSON Array):
 
       if (matchedProducts.length > 0) {
         matchedProducts.sort(
-          (a, b) => (b.confidence_score || 0) - (a.confidence_score || 0)
+          (a, b) => (b.confidence_score || 0) - (a.confidence_score || 0),
         );
 
         matches.push({

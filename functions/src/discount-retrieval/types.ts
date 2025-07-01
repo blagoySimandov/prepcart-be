@@ -1,7 +1,9 @@
+import { ProductCandidate } from "../util/types";
+
 export interface ShoppingListItem {
   item: string;
   quantity?: number;
-  unit?: number;
+  unit?: string;
 }
 
 export interface ShoppingListRequest {
@@ -10,21 +12,6 @@ export interface ShoppingListRequest {
   store_ids?: string[];
   max_results_per_item?: number;
   discount_language?: string;
-}
-
-export interface ProductCandidate {
-  id: string;
-  product_name: string;
-  store_id: string;
-  country: string;
-  discount_percent: number;
-  price_before_discount_local: number;
-  currency_local: string;
-  quantity: string;
-  page_number: number;
-  similarity_score: number;
-  confidence_score?: number;
-  is_exact_match?: boolean;
 }
 
 export interface MatchedProduct {
@@ -37,7 +24,6 @@ export interface ShoppingListResponse {
   unmatched_items: string[];
   total_potential_savings_by_currency: { [currency: string]: number };
   processing_time_ms: number;
-  savings_explanation?: string;
 }
 
 export interface SavingsCalculationDetail {

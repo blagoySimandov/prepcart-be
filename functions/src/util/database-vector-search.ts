@@ -1,15 +1,15 @@
-import { getFirestore } from "firebase-admin/firestore";
 import { logger } from "firebase-functions/v2";
-import { ProductCandidate } from "../../types";
+import { ProductCandidate } from "./types";
+import { getFirestore } from "firebase-admin/firestore";
+import { PRODUCTS_COLLECTION } from "../constants";
 
 const db = getFirestore();
-const PRODUCTS_COLLECTION = "products";
 
 export const searchSimilarProducts = async (
   queryEmbedding: number[],
   country?: string,
   storeIds?: string[],
-  maxResults = 10,
+  maxResults = 10
 ): Promise<ProductCandidate[]> => {
   const collection = db.collection(PRODUCTS_COLLECTION);
 
@@ -54,6 +54,7 @@ export const searchSimilarProducts = async (
         quantity: product.discount.quantity,
         page_number: product.discount.page_number,
         similarity_score: data.similarity_score || 0,
+        requires_loyalty_card: product.discount.requires_loyalty_card || false,
       });
     });
 

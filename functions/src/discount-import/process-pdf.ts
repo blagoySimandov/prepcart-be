@@ -33,7 +33,8 @@ Output Format: Return a JSON object with a "discounted_products" key.
       "quantity": string, // The quantity for which the product is priced at. e.g. "1 pcs", "1 kg"  or "1 bottle"
       "active_until": string, // The date until which the discount is active. e.g. "2023-01-01"
       "discount_percent": number,
-      "page_number": number
+      "page_number": number,
+      "requires_loyalty_card": boolean // true if the discount requires a loyalty card, membership, or special customer card
     },
     ...
   ]
@@ -45,6 +46,8 @@ Requirements:
 - The "discount_percent" field MUST be an integer. If you see a decimal, round it to the nearest whole number
 - Use the EXACT price as shown in the PDF in its original currency for "price_before_discount_local"
 - Use the correct currency code (EUR, BGN, USD, GBP, etc.) for "currency_local"
+- Set "requires_loyalty_card" to true if the discount mentions requirements like: loyalty card, membership card, club card, customer card, VIP card, rewards card, or similar membership requirements
+- Set "requires_loyalty_card" to false if no membership requirements are mentioned or if the discount is available to all customers
 - Ensure all fields are filled where information is available
 - Ensure product names are in the language of the PDF
 - Round prices to 2 decimal places

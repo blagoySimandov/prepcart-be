@@ -1,22 +1,19 @@
 import { GoogleGenAI } from "@google/genai";
 import { logger } from "firebase-functions/v2";
-import {
-  ProductCandidate,
-  ShoppingListItem,
-  ShoppingListRequest,
-} from "../types";
+import { ShoppingListItem, ShoppingListRequest } from "../types";
 import {
   batchGenerateEmbeddings,
   batchMatchWithGemini,
   calculateSavingsWithGemini,
 } from "../services/gemini";
-import { searchSimilarProducts } from "../services/database";
 import { translateShoppingList } from "../services/translation";
 import { DEFAULT_DISCOUNT_LANGUAGE } from "../constants";
+import { searchSimilarProducts } from "../../util/database-vector-search";
+import { ProductCandidate } from "../../util/types";
 
 export const findMatchingProducts = async (
   requestData: ShoppingListRequest,
-  ai: GoogleGenAI
+  ai: GoogleGenAI,
 ) => {
   const maxResultsPerItem = requestData.max_results_per_item || 10;
 
@@ -32,7 +29,7 @@ export const findMatchingProducts = async (
   const translationMap = await translateShoppingList(
     requestData.shopping_list,
     discountLanguage,
-    ai
+    ai,
   );
 
   const allTranslatedItems = [...new Set(Array.from(translationMap.values()))];
@@ -63,7 +60,7 @@ export const findMatchingProducts = async (
         embedding,
         requestData.country,
         requestData.store_ids,
-        maxResultsPerItem
+        maxResultsPerItem,
       );
 
       logger.info("Found candidates", {

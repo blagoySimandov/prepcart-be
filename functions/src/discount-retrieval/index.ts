@@ -63,21 +63,20 @@ export const matchShoppingList = onRequest(
         (item) => !matchedShoppingItems.has(item)
       );
 
-      const processingTimeMs = Date.now() - startTime;
+      const endTime = Date.now();
 
       const responseData: ShoppingListResponse = {
         matches: allMatches,
         unmatched_items: unmatchedItems,
         total_potential_savings_by_currency: savingsResult.savings_by_currency,
-        processing_time_ms: processingTimeMs,
-        savings_explanation: savingsResult.explanation,
+        processing_time_ms: endTime - startTime,
       };
 
       logger.info("Shopping list processing completed", {
         totalMatches: allMatches.length,
         unmatchedItems: unmatchedItems.length,
         totalSavings: responseData.total_potential_savings_by_currency,
-        processingTimeMs,
+        processingTimeMs: responseData.processing_time_ms,
       });
 
       response.json(responseData);

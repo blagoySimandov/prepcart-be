@@ -7,6 +7,7 @@ export interface DiscountDetails {
   currency_local: string;
   discount_percent: number;
   page_number: number;
+  requires_loyalty_card: boolean;
 }
 
 export interface AnalysisResult {
