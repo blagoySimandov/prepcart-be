@@ -139,7 +139,9 @@ export const processPdfOnUpload = onObjectFinalized(
     };
 
     const validFrom = parseDate(startDateStr);
-    const validUntil = parseDate(endDateStr).setHours(23, 59, 59, 999);
+    const validUntil = new Date(
+      parseDate(endDateStr).setHours(23, 59, 59, 999),
+    );
 
     logger.info("Processing PDF for discount extraction:", { filePath });
 
