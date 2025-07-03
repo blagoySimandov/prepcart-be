@@ -14,7 +14,7 @@ export const searchSimilarProducts = async (
   const collection = db.collection(PRODUCTS_COLLECTION);
 
   let query = collection
-    .where("archivedAt", "==", null)
+    .where("validUntil", ">=", new Date())
     .where("isEmbedded", "==", true);
 
   if (country) {

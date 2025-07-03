@@ -27,17 +27,40 @@ export const catalogSearch = functions.https.onCall(
 
     try {
       const maxResults = request.data.max_results || DEFAULT_MAX_RESULTS;
+      const page = request.data.page || 0;
       const country = request.data.country;
       const storeIds = request.data.store_ids;
-      const results = await searchProductsWithAlgolia(
+      const response = await searchProductsWithAlgolia(
         query,
         algoliaApiKey,
         country,
         storeIds,
-        maxResults
+        maxResults,
+        page
       );
 
-      return { results };
+      const transformedHits = (response.hits || []).map((hit: any) => ({
+        id: hit.id,
+        objectID: hit.objectID,
+        productName: hit["discount.product_name"],
+        priceBeforeDiscount: hit["discount.price_before_discount_local"],
+        discountPercent: hit["discount.discount_percent"],
+        pageNumber: hit["discount.page_number"],
+        storeId: hit.storeId,
+        country: hit.country,
+        sourceFileUri: hit.sourceFileUri,
+        validUntil: hit.validUntil,
+        // Add any other fields your frontend needs
+      }));
+
+      // Return consistent structure with pagination info
+      return {
+        results: transformedHits,
+        page: response.page || 0,
+        totalPages: response.nbPages || 0,
+        totalResults: response.nbHits || 0,
+        hasMore: (response.page || 0) < (response.nbPages || 1) - 1,
+      };
     } catch (err) {
       logger.error("Algolia search failed", err);
       throw new functions.https.HttpsError(

@@ -1,10 +1,5 @@
-import { ProductCandidate } from "../util/types";
-
-export interface ShoppingListItem {
-  item: string;
-  quantity?: number;
-  unit?: string;
-}
+import { ProductCandidate, ShoppingListItem } from "../types";
+export * from "../types";
 
 export interface ShoppingListRequest {
   shopping_list: ShoppingListItem[];
