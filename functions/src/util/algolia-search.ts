@@ -9,7 +9,7 @@ export const searchProductsWithAlgolia = async (
   country?: string,
   storeIds?: string[],
   maxResults = 10,
-  page = 0,
+  page = 1,
 ) => {
   try {
     const client = algoliasearch(ALGOLIA_APP_ID, algoliaApiKey);
