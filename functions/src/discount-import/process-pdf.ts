@@ -17,8 +17,7 @@ const API_KEY_SECRET = defineSecret("API_KEY");
 const db = getFirestore();
 
 const MODEL_NAME = "gemini-2.5-flash-preview-05-20";
-const TARGET_STORAGE_BUCKET =
-  process.env.GCLOUD_PROJECT + ".firebasestorage.app";
+const TARGET_STORAGE_BUCKET = process.env.GCLOUD_PROJECT + ".firebasestorage.app";
 const PRODUCTS_COLLECTION = "products";
 
 const PROMPT_FOR_DISCOUNT_EXTRACTION = `
@@ -91,12 +90,9 @@ const extractDiscountsFromPdf = async (
 
     const responseText = result.text;
     if (!responseText) {
-      throw new Error(
-        "Gemini API returned no text content for discount extraction.",
-      );
+      throw new Error("Gemini API returned no text content for discount extraction.");
     }
-    const { discounted_products: discountedProducts }: AnalysisResult =
-      JSON.parse(responseText);
+    const { discounted_products: discountedProducts }: AnalysisResult = JSON.parse(responseText);
     return discountedProducts || [];
   } finally {
     if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
@@ -113,10 +109,7 @@ export const processPdfOnUpload = onObjectFinalized(
   async (event) => {
     const { name: filePath, contentType } = event.data;
 
-    if (
-      !filePath.startsWith("brochures/") ||
-      !contentType?.startsWith("application/pdf")
-    ) {
+    if (!filePath.startsWith("brochures/") || !contentType?.startsWith("application/pdf")) {
       logger.info("File is not a processable PDF brochure. Skipping.", {
         filePath,
       });
@@ -139,9 +132,7 @@ export const processPdfOnUpload = onObjectFinalized(
     };
 
     const validFrom = parseDate(startDateStr);
-    const validUntil = new Date(
-      parseDate(endDateStr).setHours(23, 59, 59, 999),
-    );
+    const validUntil = new Date(parseDate(endDateStr).setHours(23, 59, 59, 999));
 
     logger.info("Processing PDF for discount extraction:", { filePath });
 
@@ -177,9 +168,7 @@ export const processPdfOnUpload = onObjectFinalized(
       });
 
       await firestoreBatch.commit();
-      logger.info(
-        `Successfully stored ${products.length} new products in Firestore.`,
-      );
+      logger.info(`Successfully stored ${products.length} new products in Firestore.`);
     } catch (error: any) {
       logger.error("FATAL: Error processing PDF for discount extraction:", {
         filePath,

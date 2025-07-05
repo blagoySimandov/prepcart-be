@@ -5,17 +5,21 @@ import { PRODUCTS_COLLECTION } from "../constants";
 
 const db = getFirestore();
 
-export const searchSimilarProducts = async (
-  queryEmbedding: number[],
-  country?: string,
-  storeIds?: string[],
-  maxResults = 10
-): Promise<ProductCandidate[]> => {
+type SearchSimiliarProductsOptions = {
+  queryEmbedding: number[];
+  country?: string;
+  storeIds?: string[];
+  maxResults?: number;
+};
+export async function searchSimilarProducts({
+  queryEmbedding,
+  country,
+  storeIds,
+  maxResults,
+}: SearchSimiliarProductsOptions): Promise<ProductCandidate[]> {
   const collection = db.collection(PRODUCTS_COLLECTION);
 
-  let query = collection
-    .where("validUntil", ">=", new Date())
-    .where("isEmbedded", "==", true);
+  let query = collection.where("validUntil", ">=", new Date()).where("isEmbedded", "==", true);
 
   if (country) {
     query = query.where("country", "==", country);
@@ -48,8 +52,7 @@ export const searchSimilarProducts = async (
         store_id: product.storeId,
         country: product.country,
         discount_percent: product.discount.discount_percent,
-        price_before_discount_local:
-          product.discount.price_before_discount_local,
+        price_before_discount_local: product.discount.price_before_discount_local,
         currency_local: product.discount.currency_local,
         quantity: product.discount.quantity,
         page_number: product.discount.page_number,
@@ -65,4 +68,4 @@ export const searchSimilarProducts = async (
     });
     return [];
   }
-};
+}

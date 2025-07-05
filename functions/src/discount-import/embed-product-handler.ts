@@ -1,4 +1,3 @@
-/* eslint-disable operator-linebreak */
 import { onTaskDispatched } from "firebase-functions/v2/tasks";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { GoogleGenAI } from "@google/genai";
@@ -6,18 +5,16 @@ import { logger } from "firebase-functions/v2";
 import { defineSecret } from "firebase-functions/params";
 import { initializeAppIfNeeded } from "../util/firebase";
 import { Product } from "./types";
+import { API_KEY_SECRET, EMBEDDING_MODEL, PRODUCTS_COLLECTION } from "../constants";
 
 initializeAppIfNeeded();
 
-const API_KEY_SECRET = defineSecret("API_KEY");
+const API_KEY = defineSecret(API_KEY_SECRET);
 const db = getFirestore();
-
-const EMBEDDING_MODEL = "text-embedding-004";
-const PRODUCTS_COLLECTION = "products";
 
 export const onProductEmbed = onTaskDispatched<Product>(
   {
-    secrets: [API_KEY_SECRET],
+    secrets: [API_KEY],
     retryConfig: { maxAttempts: 3, minBackoffSeconds: 30 },
     rateLimits: { maxConcurrentDispatches: 6, maxDispatchesPerSecond: 2 },
   },
@@ -32,7 +29,7 @@ export const onProductEmbed = onTaskDispatched<Product>(
     }
 
     try {
-      const apiKey = API_KEY_SECRET.value();
+      const apiKey = API_KEY.value();
       if (!apiKey) throw new Error("API_KEY secret not configured.");
 
       const ai = new GoogleGenAI({ apiKey });
