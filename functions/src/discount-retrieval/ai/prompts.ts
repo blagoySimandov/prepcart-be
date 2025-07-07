@@ -82,7 +82,9 @@ Instructions:
 1. For each shopping list item, evaluate its candidates to find all that match the item.
 2. A match is valid ONLY if the product is a good fit for discounting the shopping list item. Consider all attributes.
 3. The 'similarity_score' is a hint, but use your judgment.
-7. If no candidate is a good match, do not include it in your response.
+4. Reorder the matched candidates so that the best match is the FIRST element in the list. The order of the rest does not matter.
+5. If there are multiple candidates that seem equally like the best match, pick the one with the greater discount_percent as the first element.
+6. If no candidate is a good match, do not include it in your response.
 
 Output Format (JSON Array):
 [

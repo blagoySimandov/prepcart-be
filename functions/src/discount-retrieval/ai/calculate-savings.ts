@@ -3,18 +3,16 @@ import { MatchedProduct } from "../types";
 import { logger } from "firebase-functions/v2";
 import { CHEAP_MODEL_NAME } from "../constants";
 
-type SavingsByCurrency = { [currency: string]: number };
-
-export interface SavingsCalculationResult {
-  savings_by_currency: SavingsByCurrency;
+export interface QuantityMultiplierResult {
+  updated_matches: MatchedProduct[];
 }
 
-const calculateSavings = async (
+const calculateQuantityMultipliers = async (
   matches: MatchedProduct[],
   ai: GoogleGenAI
-): Promise<SavingsCalculationResult> => {
+): Promise<QuantityMultiplierResult> => {
   if (matches.length === 0) {
-    return { savings_by_currency: {} };
+    return { updated_matches: [] };
   }
   const matchesData = matches
     .map((match, index) => {
@@ -28,6 +26,7 @@ const calculateSavings = async (
         product_quantity: bestProduct.quantity || "1 pcs",
         price_before_discount_local: bestProduct.price_before_discount_local,
         currency_local: bestProduct.currency_local,
+        product_id: bestProduct.id,
       };
     })
     .filter(Boolean);
@@ -37,62 +36,89 @@ const calculateSavings = async (
   });
 
   const prompt = `
-Task: For each shopping list item, determine the quantity multiplier needed to calculate savings.
+Calculate quantity multipliers. Products are sold per piece/package, not per gram/ml.
 
-Shopping Items and Product Data:
+Data:
 ${JSON.stringify(matchesData, null, 2)}
 
-Instructions:
-1.  The shopping_item contains the user's request with quantity information (e.g., {"item": "Cheese", "quantity": 500, "unit": "g"})
-2.  The product_quantity describes what the discount price applies to (e.g., "1 bottle", "1 kg", "1 package")
-3.  Determine the quantity_multiplier based on the user's requested quantity.
-    *   Be very careful with weight conversions. For example, if the user wants 500g and the discount is for 1kg, the quantity_multiplier is 0.5.
-    *   If the product_quantity is ambiguous (e.g., "per package", "1 piece") and the user requests a specific weight (e.g., 500g), you must estimate the weight of the package. Use your knowledge to make a reasonable guess (e.g., a standard package of sliced cheese might be 150g).
-4.  Use your best judgment to interpret quantities and units in other cases where they don't match exactly.
+Examples:
+- User wants "1 cheese", product is "500g cheese" → multiplier = 1 (1 package)
+- User wants "2 milk", product is "1L milk" → multiplier = 2 (2 bottles)  
+- User wants "500g cheese", product is "250g cheese" → multiplier = 2 (2 packages)
 
-Output Format (JSON):
+IMPORTANT: Return EXACTLY this JSON structure:
 {
   "quantity_calculations": [
     {
-      "id": "The id of the item from the input",
-      "quantity_multiplier": number
+      "id": "0",
+      "quantity_multiplier": 1
+    },
+    {
+      "id": "1", 
+      "quantity_multiplier": 2
     }
   ]
 }
+
+Never return null for quantity_multiplier - use 1 as default.
 `;
   const result = await ai.models.generateContent({
     model: CHEAP_MODEL_NAME,
     contents: [{ role: "user", parts: [{ text: prompt }] }],
-    config: { responseMimeType: "application/json" },
+    config: {
+      responseMimeType: "application/json",
+      temperature: 0.1,
+    },
   });
 
   const responseText = result.text;
   if (!responseText) {
-    logger.warn("Gemini returned no response for savings calculation.");
-    return { savings_by_currency: {} };
+    logger.warn("Gemini returned no response for quantity calculation.");
+    return { updated_matches: [] };
   }
 
   try {
     const { quantity_calculations: quantityCalculations } = JSON.parse(responseText);
 
-    const savingsByCurrency: SavingsByCurrency = {};
+    const updatedMatches = matches.map((match) => {
+      const matchData = matchesData.find((m) => m?.product_id === match.matched_products[0]?.id);
+      const calc = quantityCalculations.find((c: any) => c.id === matchData?.id);
 
-    (quantityCalculations as { id: string; quantity_multiplier: number }[]).forEach((calc) => {
-      const match = matchesData.find((m) => m?.id === calc.id);
-      if (match) {
-        const savings = match.price_before_discount_local * calc.quantity_multiplier;
-        savingsByCurrency[match.currency_local] =
-          (savingsByCurrency[match.currency_local] || 0) + savings;
+      if (matchData && calc) {
+        logger.info("Applied quantity multiplier", {
+          shopping_item: matchData.shopping_item.item,
+          product_quantity: matchData.product_quantity,
+          quantity_multiplier: calc.quantity_multiplier,
+        });
+
+        // Add quantity multiplier to the best product
+        const updatedProducts = match.matched_products.map((product, index) => {
+          if (index === 0) {
+            // Best product gets the quantity multiplier
+            return {
+              ...product,
+              quantity_multiplier: calc.quantity_multiplier,
+            };
+          }
+          return product;
+        });
+
+        return {
+          ...match,
+          matched_products: updatedProducts,
+        };
       }
+      return match;
     });
-    return { savings_by_currency: savingsByCurrency };
+
+    return { updated_matches: updatedMatches };
   } catch (error) {
     logger.error("Error parsing savings calculation response from Gemini", {
       error: error instanceof Error ? error.message : "Unknown error",
       response: responseText,
     });
-    return { savings_by_currency: {} };
+    return { updated_matches: [] };
   }
 };
 
-export { calculateSavings };
+export { calculateQuantityMultipliers };

@@ -39,6 +39,8 @@ export interface ProductCandidate {
   confidence_score?: number;
   is_exact_match?: boolean;
   requires_loyalty_card: boolean;
+  // Quantity information for client-side calculations
+  quantity_multiplier?: number;
 }
 
 export interface ShoppingListItem {

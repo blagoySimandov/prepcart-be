@@ -6,9 +6,9 @@ import { initializeAppIfNeeded } from "../util/firebase";
 import { apiKeySecret, DEFAULT_DISCOUNT_LANGUAGE, FUNCTION_CONFIG } from "./constants";
 import { isValidMethod, isValidRequestBody } from "./http";
 import { translateShoppingListItems } from "./ai/translation";
-import { searchProductsWithTypesense } from "../util/typesense-search";
+import { searchProductsWithTypesense, typesenseKeySecret } from "../util/typesense-search";
 import { filterBadCandidates } from "./ai/filter-bad-candidates";
-import { calculateSavings } from "./ai/calculate-savings";
+import { calculateQuantityMultipliers } from "./ai/calculate-savings";
 
 initializeAppIfNeeded();
 
@@ -25,6 +25,7 @@ export const matchShoppingList = onRequest(FUNCTION_CONFIG, async (request, resp
 
     const requestData: ShoppingListRequest = request.body;
     const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+    const typesenseApiKey = typesenseKeySecret.value();
 
     logger.info("Processing shopping list", {
       itemCount: requestData.shopping_list.length,
@@ -70,6 +71,7 @@ export const matchShoppingList = onRequest(FUNCTION_CONFIG, async (request, resp
       });
       const originalCandidates = await searchProductsWithTypesense({
         query: originalQuery,
+        apiKey: typesenseApiKey,
         country: requestData.country,
         storeIds: requestData.store_ids,
         maxResults: 10,
@@ -77,20 +79,22 @@ export const matchShoppingList = onRequest(FUNCTION_CONFIG, async (request, resp
 
       const discountLangCandidates = discountLangQuery
         ? await searchProductsWithTypesense({
-            query: discountLangQuery,
-            country: requestData.country,
-            storeIds: requestData.store_ids,
-            maxResults: 10,
-          })
+          query: discountLangQuery,
+          apiKey: typesenseApiKey,
+          country: requestData.country,
+          storeIds: requestData.store_ids,
+          maxResults: 10,
+        })
         : [];
 
       const englishCandidates = englishQuery
         ? await searchProductsWithTypesense({
-            query: englishQuery,
-            country: requestData.country,
-            storeIds: requestData.store_ids,
-            maxResults: 10,
-          })
+          query: englishQuery,
+          apiKey: typesenseApiKey,
+          country: requestData.country,
+          storeIds: requestData.store_ids,
+          maxResults: 10,
+        })
         : [];
 
       const allCandidates = [
@@ -127,9 +131,9 @@ export const matchShoppingList = onRequest(FUNCTION_CONFIG, async (request, resp
 
     logger.info("Filtered matches", { allMatches });
 
-    const savingsResult = await calculateSavings(allMatches, ai);
+    const quantityResult = await calculateQuantityMultipliers(allMatches, ai);
 
-    logger.info("Savings calculation result", { savingsResult });
+    logger.info("Quantity multiplier result", { quantityResult });
 
     const matchedShoppingItems = new Set(allMatches.map((m) => m.shopping_list_item.item));
     const allShoppingItems = requestData.shopping_list.map((i) => i.item.trim()).filter(Boolean);
@@ -138,18 +142,16 @@ export const matchShoppingList = onRequest(FUNCTION_CONFIG, async (request, resp
     const endTime = Date.now();
 
     const responseData: ShoppingListResponse = {
-      matches: allMatches,
+      matches: quantityResult.updated_matches,
       unmatched_items: unmatchedItems,
-      total_potential_savings_by_currency: savingsResult.savings_by_currency,
       processing_time_ms: endTime - startTime,
     };
 
     logger.info("Final response data", { responseData });
 
     logger.info("Shopping list processing completed", {
-      totalMatches: allMatches.length,
+      totalMatches: quantityResult.updated_matches.length,
       unmatchedItems: unmatchedItems.length,
-      totalSavings: responseData.total_potential_savings_by_currency,
       processingTimeMs: responseData.processing_time_ms,
     });
 

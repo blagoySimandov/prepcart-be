@@ -1,28 +1,18 @@
 import { Client as TypesenseClient } from "typesense";
 import { logger } from "firebase-functions/v2";
-import { ProductCandidate } from "./types";
+import { ProductCandidate, TypesenseDocument } from "./types";
+import { defineSecret } from "firebase-functions/params";
 
-// Typesense configuration
 const TYPESENSE_HOST = "p8qx4bsv7e5hfrnwp-1.a1.typesense.net";
 const TYPESENSE_PORT = 443;
 const TYPESENSE_PROTOCOL = "https";
-const TYPESENSE_API_KEY = "FuXD7rkRHLAH078qSeQDFuh5g9C0ZPJI";
-const COLLECTION_NAME = "products"; // Assuming your collection is named 'products'
-
-const client = new TypesenseClient({
-  nodes: [
-    {
-      host: TYPESENSE_HOST,
-      port: TYPESENSE_PORT,
-      protocol: TYPESENSE_PROTOCOL,
-    },
-  ],
-  apiKey: TYPESENSE_API_KEY,
-  connectionTimeoutSeconds: 10,
-});
+const TYPESENSE_SECRET = "TYPESENSE_KEY";
+export const typesenseKeySecret = defineSecret(TYPESENSE_SECRET);
+const COLLECTION_NAME = "products";
 
 type SearchProductsOptions = {
   query: string;
+  apiKey: string;
   country?: string;
   storeIds?: string[];
   maxResults?: number;
@@ -33,22 +23,30 @@ export async function searchProductsWithTypesense({
   country,
   storeIds,
   maxResults = 10,
+  apiKey,
 }: SearchProductsOptions): Promise<ProductCandidate[]> {
   try {
-    // Build filter string for additional constraints
+    const client = new TypesenseClient({
+      nodes: [
+        {
+          host: TYPESENSE_HOST,
+          port: TYPESENSE_PORT,
+          protocol: TYPESENSE_PROTOCOL,
+        },
+      ],
+      apiKey,
+      connectionTimeoutSeconds: 10,
+    });
     const filters: string[] = [];
 
-    // Filter by valid date range
     const currentTimestamp = Math.floor(Date.now() / 1000);
     filters.push(`validFrom:<=${currentTimestamp}`);
     filters.push(`validUntil:>=${currentTimestamp}`);
 
-    // Filter by country if provided
     if (country) {
       filters.push(`country:=${country}`);
     }
 
-    // Filter by store IDs if provided
     if (storeIds && storeIds.length > 0) {
       const storeFilter = storeIds.map((id) => `storeId:=${id}`).join(" || ");
       filters.push(`(${storeFilter})`);
@@ -56,11 +54,11 @@ export async function searchProductsWithTypesense({
 
     const searchParameters = {
       q: query,
-      query_by: "discount.product_name", // Search in the product name field
+      query_by: "discount.product_name",
       filter_by: filters.join(" && "),
       per_page: maxResults,
       page: 1,
-      sort_by: "_text_match:desc", // Sort by text match relevance
+      sort_by: "_text_match:desc",
     };
 
     logger.info("Typesense search parameters", { searchParameters });
@@ -79,7 +77,7 @@ export async function searchProductsWithTypesense({
 
     if (searchResults.hits) {
       for (const hit of searchResults.hits) {
-        const document = hit.document as any;
+        const document = hit.document as TypesenseDocument;
 
         candidates.push({
           id: document.id,
@@ -91,7 +89,7 @@ export async function searchProductsWithTypesense({
           currency_local: document.discount?.currency_local || "",
           quantity: document.discount?.quantity || "",
           page_number: document.discount?.page_number || 0,
-          similarity_score: Number(hit.text_match_info?.score) || 0, // Use text match score
+          similarity_score: Number(hit.text_match_info?.score) || 0,
           requires_loyalty_card: document.discount?.requires_loyalty_card || false,
         });
       }

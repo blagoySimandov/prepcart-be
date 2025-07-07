@@ -17,7 +17,6 @@ export interface MatchedProduct {
 export interface ShoppingListResponse {
   matches: MatchedProduct[];
   unmatched_items: string[];
-  total_potential_savings_by_currency: { [currency: string]: number };
   processing_time_ms: number;
 }
 

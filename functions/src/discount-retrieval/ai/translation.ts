@@ -18,7 +18,10 @@ export async function translateShoppingListItems(
   const response = await ai.models.generateContent({
     model: CHEAP_MODEL_NAME,
     contents: [{ role: "user", parts: [{ text: prompt }] }],
-    config: { responseMimeType: "application/json" },
+    config: {
+      responseMimeType: "application/json",
+      temperature: 0.1,
+    },
   });
 
   if (!response.text) {

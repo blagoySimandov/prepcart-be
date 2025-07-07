@@ -7,7 +7,7 @@ import { GeminiBatchResponseItem } from "./types";
 
 export async function filterBadCandidates(
   ai: GoogleGenAI,
-  shoppingListWithCandidates: MatchedProduct[],
+  shoppingListWithCandidates: MatchedProduct[]
 ): Promise<MatchedProduct[]> {
   if (shoppingListWithCandidates.length === 0) {
     return [];
@@ -25,7 +25,10 @@ export async function filterBadCandidates(
   const response = await ai.models.generateContent({
     model: CHEAP_MODEL_NAME,
     contents: [{ role: "user", parts: [{ text: prompt }] }],
-    config: { responseMimeType: "application/json" },
+    config: {
+      responseMimeType: "application/json",
+      temperature: 0.1,
+    },
   });
 
   const responseText = response.text;
@@ -44,7 +47,7 @@ export async function filterBadCandidates(
       }
 
       const originalShoppingItemContainer = shoppingListWithCandidates.find(
-        (slwc) => slwc.shopping_list_item.item === item.shopping_list_item,
+        (slwc) => slwc.shopping_list_item.item === item.shopping_list_item
       );
 
       if (!originalShoppingItemContainer) {
