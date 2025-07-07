@@ -4,6 +4,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { PRODUCTS_COLLECTION } from "../constants";
 
 const db = getFirestore();
+const MAX_RESULTS_DEFAULT = 10;
 
 type SearchSimiliarProductsOptions = {
   queryEmbedding: number[];
@@ -33,7 +34,7 @@ export async function searchSimilarProducts({
     const vectorQuery = query.findNearest({
       vectorField: "embedding",
       queryVector: queryEmbedding,
-      limit: maxResults,
+      limit: maxResults || MAX_RESULTS_DEFAULT,
       distanceMeasure: "COSINE",
       distanceResultField: "similarity_score",
     });
@@ -47,7 +48,7 @@ export async function searchSimilarProducts({
       const product = data;
 
       candidates.push({
-        id: product.id,
+        id: doc.id,
         product_name: product.discount.product_name,
         store_id: product.storeId,
         country: product.country,

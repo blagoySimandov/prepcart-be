@@ -36,7 +36,7 @@ export const onProductEmbed = onTaskDispatched<Product>(
       const result = await ai.models.embedContent({
         model: EMBEDDING_MODEL,
         contents: [{ parts: [{ text: productName }] }],
-        config: { taskType: "RETRIEVAL_DOCUMENT" },
+        config: { taskType: "RETRIEVAL_DOCUMENT", outputDimensionality: 1536 },
       });
       const embedding = result.embeddings?.[0]?.values;
 
@@ -50,6 +50,7 @@ export const onProductEmbed = onTaskDispatched<Product>(
         .update({
           embedding: FieldValue.vector(embedding),
           isEmbedded: true,
+          lastEmbeddingUpdate: FieldValue.serverTimestamp(),
         });
 
       logger.info("Successfully processed embedding for product:", {

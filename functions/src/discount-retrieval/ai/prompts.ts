@@ -13,19 +13,29 @@ export type TranslationJsonResponse = {
 const translationPrompt = (data: TranslationPromptData) => `
 Task: Translate the following shopping list items into the "discount language" and into English.
 
-Shopping List Item:
-[${data.shopping_list_item}]
+Shopping List Items:
+${JSON.stringify(data.shopping_list_item)}
 
-Discount Language:
-${data.discount_language}
+Discount Language: ${data.discount_language}
+
+Instructions:
+1. Translate each item in the shopping list into the specified discount language
+2. Translate each item in the shopping list into English
+3. Maintain the exact same order as the input items
+4. Return exactly the same number of translations as input items
+5. Use the exact JSON format specified below
 
 Output Format (JSON):
 {
-result: {
-  "discountLanguage": ["translatedItem1", "translatedItem2"], // The discount language translation of the shopping list item
-  "english": "["translatedItem1", "translatedItem2"]" // The English translation of the shopping list item
+  "result": {
+    "discountLanguage": ["translation1", "translation2", "translation3", "translation4"],
+    "english": ["english1", "english2", "english3", "english4"]
   }
 }
+
+Important: The arrays must contain exactly ${
+  data.shopping_list_item.length
+} items each, in the same order as the input.
 `;
 
 type FilterCandidatesPromptData = {
@@ -59,7 +69,7 @@ const filterCandidatesPrompt = (data: FilterCandidatesPromptData) => {
           requires_loyalty_card: c.requires_loyalty_card,
         })),
       };
-    },
+    }
   );
 
   return `

@@ -5,7 +5,7 @@ import { EMBEDDING_MODEL } from "../constants";
 export const batchGenerateEmbeddings = async (
   texts: string[],
   ai: GoogleGenAI,
-): Promise<Map<string, number[]>> => {
+): Promise<Map<string, number[] | null>> => {
   if (texts.length === 0) {
     return new Map();
   }
@@ -13,7 +13,7 @@ export const batchGenerateEmbeddings = async (
   const result = await ai.models.embedContent({
     model: EMBEDDING_MODEL,
     contents: texts.map((text) => ({ parts: [{ text }] })),
-    config: { taskType: "RETRIEVAL_QUERY" },
+    config: { taskType: "RETRIEVAL_QUERY", outputDimensionality: 1536 },
   });
 
   const embeddings = result.embeddings;
@@ -21,7 +21,7 @@ export const batchGenerateEmbeddings = async (
     throw new Error("Mismatch in batch embedding response count.");
   }
 
-  const embeddingMap = new Map<string, number[]>();
+  const embeddingMap = new Map<string, number[] | null>();
   embeddings.forEach((contentEmbedding, i) => {
     const text = texts[i];
     const embedding = contentEmbedding.values;
@@ -29,6 +29,7 @@ export const batchGenerateEmbeddings = async (
       embeddingMap.set(text, embedding);
     } else {
       logger.warn(`Failed to generate embedding for: ${text}`);
+      embeddingMap.set(text, null);
     }
   });
 

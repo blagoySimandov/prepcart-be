@@ -11,7 +11,7 @@ export interface SavingsCalculationResult {
 
 const calculateSavings = async (
   matches: MatchedProduct[],
-  ai: GoogleGenAI,
+  ai: GoogleGenAI
 ): Promise<SavingsCalculationResult> => {
   if (matches.length === 0) {
     return { savings_by_currency: {} };
