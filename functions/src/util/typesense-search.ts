@@ -40,8 +40,8 @@ export async function searchProductsWithTypesense({
     const filters: string[] = [];
 
     const currentTimestamp = Math.floor(Date.now() / 1000);
-    filters.push(`validFrom:<=${currentTimestamp}`);
-    filters.push(`validUntil:>=${currentTimestamp}`);
+    filters.push(`discount.valid_from:<=${currentTimestamp}`);
+    filters.push(`discount.valid_until:>=${currentTimestamp}`);
 
     if (country) {
       filters.push(`country:=${country}`);

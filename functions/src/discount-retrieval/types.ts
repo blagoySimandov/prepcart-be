@@ -19,15 +19,3 @@ export interface ShoppingListResponse {
   unmatched_items: string[];
   processing_time_ms: number;
 }
-
-export interface SavingsCalculationDetail {
-  shopping_item: string;
-  product_name: string;
-  savings: number;
-  currency: string;
-  used_local_calculation: boolean;
-}
-
-export interface ParsedQuantity {
-  isAmbiguous: boolean;
-}

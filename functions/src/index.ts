@@ -4,8 +4,8 @@ import { processPdfOnUpload } from "./discount-import/process-pdf";
 import { reEmbedAllProducts } from "./discount-import/re-embed-products";
 import { matchShoppingList } from "./discount-retrieval";
 
-exports.processPdfOnUpload = processPdfOnUpload;
 exports.enqueueProductForEmbedding = enqueueProductForEmbedding;
 exports.onProductEmbed = onProductEmbed;
 exports.reEmbedAllProducts = reEmbedAllProducts;
+exports.processPdfOnUpload = processPdfOnUpload;
 exports.matchShoppingList = matchShoppingList;

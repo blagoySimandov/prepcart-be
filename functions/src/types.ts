@@ -1,7 +1,6 @@
 import { FieldValue } from "firebase-admin/firestore";
 
-// Core discount/product types shared across modules
-export interface DiscountDetails {
+export interface DiscountDetailsBase {
   product_name: string;
   price_before_discount_local: number;
   quantity: string;
@@ -11,13 +10,23 @@ export interface DiscountDetails {
   requires_loyalty_card: boolean;
 }
 
+export interface DiscountDetailsRaw extends DiscountDetailsBase {
+  valid_from: string; // YYYY-MM-DD
+  valid_until: string; // YYYY-MM-DD
+}
+
+export interface DiscountDetails extends DiscountDetailsBase {
+  valid_from: Date;
+  valid_until: Date;
+}
+
 export interface Product {
   id: string;
   sourceFileUri: string;
   storeId: string;
   country: string;
-  validFrom: Date;
-  validUntil: Date;
+  startDate: Date;
+  endDate: Date;
   isEmbedded: boolean;
   createdAt: FieldValue;
   discount: DiscountDetails;

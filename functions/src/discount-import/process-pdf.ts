@@ -7,6 +7,7 @@ import { defineSecret } from "firebase-functions/params";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { PDFDocument } from "pdf-lib";
 import { initializeAppIfNeeded } from "../util/firebase";
 import { DiscountDetails, Product } from "../types";
 import { AnalysisResult } from "./types";
@@ -19,6 +20,7 @@ const db = getFirestore();
 const MODEL_NAME = "gemini-2.5-flash-preview-05-20";
 const TARGET_STORAGE_BUCKET = process.env.GCLOUD_PROJECT + ".firebasestorage.app";
 const PRODUCTS_COLLECTION = "products";
+const MAX_PAGES_PER_CHUNK = 20;
 
 const PROMPT_FOR_DISCOUNT_EXTRACTION = `
 Task: Extract all products that have a clear discount from the provided content.
@@ -34,7 +36,9 @@ Output Format: Return a JSON object with a "discounted_products" key.
       "discount_percent": number,
       "page_number": number,
       "requires_loyalty_card": boolean // true if the discount requires a loyalty card, membership, or special customer card
-    },
+      "valid_from": string, // YYYY-MM-DD
+      "valid_until": string // YYYY-MM-DD
+    }
     ...
   ]
 }
@@ -52,51 +56,91 @@ Requirements:
 - Round prices to 2 decimal places
 `;
 
-const extractDiscountsFromPdf = async (
-  fileName: string,
-  ai: GoogleGenAI,
-): Promise<DiscountDetails[]> => {
-  const bucket = getStorage().bucket(TARGET_STORAGE_BUCKET);
-  const tempFilePath = path.join(os.tmpdir(), path.basename(fileName));
+const splitPdf = async (filePath: string, chunkSize: number): Promise<string[]> => {
+  const pdfBytes = await fs.promises.readFile(filePath);
+  const pdfDoc = await PDFDocument.load(pdfBytes);
+  const totalPages = pdfDoc.getPages().length;
+  const chunkPaths: string[] = [];
+  const outputDir = path.dirname(filePath);
 
-  try {
-    logger.info(`Downloading file from Storage: ${fileName}`);
-    await bucket.file(fileName).download({ destination: tempFilePath });
+  for (let i = 0; i < totalPages; i += chunkSize) {
+    const newPdf = await PDFDocument.create();
+    const endPage = Math.min(i + chunkSize, totalPages);
+    const pagesToCopy = Array.from({ length: endPage - i }, (_, k) => i + k);
+    const copiedPages = await newPdf.copyPages(pdfDoc, pagesToCopy);
+    copiedPages.forEach((page) => newPdf.addPage(page));
 
-    const uploadedFile = await ai.files.upload({
-      file: tempFilePath,
-      config: { mimeType: "application/pdf" },
-    });
-    logger.info(`File uploaded to Gemini. URI: ${uploadedFile.uri}`);
-
-    const result = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: PROMPT_FOR_DISCOUNT_EXTRACTION },
-            {
-              fileData: {
-                mimeType: "application/pdf",
-                fileUri: uploadedFile.uri as string,
-              },
-            },
-          ],
-        },
-      ],
-      config: { responseMimeType: "application/json" },
-    });
-
-    const responseText = result.text;
-    if (!responseText) {
-      throw new Error("Gemini API returned no text content for discount extraction.");
-    }
-    const { discounted_products: discountedProducts }: AnalysisResult = JSON.parse(responseText);
-    return discountedProducts || [];
-  } finally {
-    if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+    const chunkPath = path.join(outputDir, `chunk-${i / chunkSize + 1}.pdf`);
+    const newPdfBytes = await newPdf.save();
+    await fs.promises.writeFile(chunkPath, newPdfBytes);
+    chunkPaths.push(chunkPath);
   }
+
+  return chunkPaths;
+};
+
+const extractDiscountsFromPdf = async (
+  filePaths: string[],
+  ai: GoogleGenAI,
+  chunkSize: number,
+): Promise<DiscountDetails[]> => {
+  let allDiscountedProducts: DiscountDetails[] = [];
+
+  for (let i = 0; i < filePaths.length; i++) {
+    const filePath = filePaths[i];
+    const startPage = i * chunkSize;
+
+    try {
+      const uploadedFile = await ai.files.upload({
+        file: filePath,
+        config: { mimeType: "application/pdf" },
+      });
+      logger.info(`File uploaded to Gemini. URI: ${uploadedFile.uri}`);
+
+      const result = await ai.models.generateContent({
+        model: MODEL_NAME,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: PROMPT_FOR_DISCOUNT_EXTRACTION },
+              {
+                fileData: {
+                  mimeType: "application/pdf",
+                  fileUri: uploadedFile.uri as string,
+                },
+              },
+            ],
+          },
+        ],
+        config: { responseMimeType: "application/json" },
+      });
+
+      const responseText = result.text;
+      if (responseText) {
+        const { discounted_products: discountedProducts }: AnalysisResult =
+          JSON.parse(responseText);
+        if (discountedProducts) {
+          const adjustedProducts = discountedProducts.map((p) => ({
+            ...p,
+            page_number: p.page_number + startPage,
+            valid_from: new Date(p.valid_from),
+            valid_until: new Date(p.valid_until),
+          }));
+          allDiscountedProducts = allDiscountedProducts.concat(adjustedProducts);
+        }
+      }
+    } catch (error) {
+      logger.error("Error processing chunk:", {
+        filePath,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    } finally {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+  }
+
+  return allDiscountedProducts;
 };
 
 export const processPdfOnUpload = onObjectFinalized(
@@ -116,7 +160,6 @@ export const processPdfOnUpload = onObjectFinalized(
       return;
     }
 
-    // <storeId>_<country>_<startDate>_<endDate>_<index>.pdf (index is optional)
     const pathParts = filePath.split("/");
     const fileName = pathParts[pathParts.length - 1];
     const storeInfo = fileName.replace(".pdf", "").split("_");
@@ -124,25 +167,31 @@ export const processPdfOnUpload = onObjectFinalized(
     const country = storeInfo[1];
     const startDateStr = storeInfo[2];
     const endDateStr = storeInfo[3];
-    // storeInfo[4] would be the index if present
 
     const parseDate = (dateStr: string) => {
       const [day, month, year] = dateStr.split(".").map(Number);
       return new Date(year, month - 1, day);
     };
 
-    const validFrom = parseDate(startDateStr);
-    const validUntil = new Date(parseDate(endDateStr).setHours(23, 59, 59, 999));
+    const startDate = parseDate(startDateStr);
+    const endDate = new Date(parseDate(endDateStr).setHours(23, 59, 59, 999));
 
     logger.info("Processing PDF for discount extraction:", { filePath });
 
+    const tempFilePath = path.join(os.tmpdir(), fileName);
+    const bucket = getStorage().bucket(TARGET_STORAGE_BUCKET);
+
     try {
+      await bucket.file(filePath).download({ destination: tempFilePath });
+
       const apiKey = API_KEY_SECRET.value();
       if (!apiKey) throw new Error("API_KEY secret is not configured");
 
       const ai = new GoogleGenAI({ apiKey });
 
-      const products = await extractDiscountsFromPdf(filePath, ai);
+      const chunkPaths = await splitPdf(tempFilePath, MAX_PAGES_PER_CHUNK);
+      const products = await extractDiscountsFromPdf(chunkPaths, ai, MAX_PAGES_PER_CHUNK);
+
       if (products.length === 0) {
         logger.info("No discounted products found in the PDF.", { filePath });
         return;
@@ -158,8 +207,8 @@ export const processPdfOnUpload = onObjectFinalized(
           sourceFileUri: `gs://${TARGET_STORAGE_BUCKET}/${filePath}`,
           storeId,
           country,
-          validFrom: validFrom,
-          validUntil: validUntil,
+          startDate,
+          endDate,
           isEmbedded: false,
           createdAt: FieldValue.serverTimestamp(),
           discount: productDetails,
@@ -169,11 +218,15 @@ export const processPdfOnUpload = onObjectFinalized(
 
       await firestoreBatch.commit();
       logger.info(`Successfully stored ${products.length} new products in Firestore.`);
-    } catch (error: any) {
-      logger.error("FATAL: Error processing PDF for discount extraction:", {
-        filePath,
-        error: error.message,
-      });
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        logger.error("FATAL: Error processing PDF for discount extraction:", {
+          filePath,
+          error: error.message,
+        });
+      }
+    } finally {
+      if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
     }
   },
 );
