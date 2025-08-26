@@ -111,9 +111,14 @@ def webhook_download():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/health", methods=["GET"])
+@app.route("/", methods=["GET"])
 def health_check():
-    return jsonify({"status": "healthy"}), 200
+    return jsonify({"status": "healthy", "service": "TikTok Downloader"}), 200
+
+
+@app.route("/health", methods=["GET"])
+def health_check_alt():
+    return jsonify({"status": "healthy", "service": "TikTok Downloader"}), 200
 
 
 if __name__ == "__main__":

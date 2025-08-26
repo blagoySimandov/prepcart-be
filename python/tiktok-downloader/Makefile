@@ -30,12 +30,18 @@ build:
 
 # Run locally for testing
 run-local:
-	docker run -p 8080:8080 $(SERVICE_NAME)
+	docker run -p 8080:8080 -t $(SERVICE_NAME)
 
-# Test the deployed service
+# Test the deployed service with TikTok URL as argument
 test-deployed:
+	@echo "Testing download endpoint with URL: $(URL)"
+	curl -X POST -o file.mp4 https://prepcart-tiktok-downloader-60659278182.europe-west1.run.app/download \
+		-H "Content-Type: application/json" \
+		-d '{"url": "$(URL)"}'
+
+health-deployed:
 	@echo "Testing health endpoint..."
-	curl -X GET https://$(SERVICE_NAME)-$(shell gcloud config get-value project).a.run.app/health
+	curl -X GET https://prepcart-tiktok-downloader-60659278182.europe-west1.run.app/health
 
 # Clean up local Docker images
 clean:
