@@ -10,6 +10,7 @@ export type TranslationJsonResponse = {
     english: string[];
   };
 };
+
 const translationPrompt = (data: TranslationPromptData) => `
 Task: Translate the following shopping list items into the "discount language" and into English.
 
@@ -69,7 +70,7 @@ const filterCandidatesPrompt = (data: FilterCandidatesPromptData) => {
           requires_loyalty_card: c.requires_loyalty_card,
         })),
       };
-    }
+    },
   );
 
   return `

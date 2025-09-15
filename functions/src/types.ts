@@ -25,8 +25,7 @@ export interface Product {
   sourceFileUri: string;
   storeId: string;
   country: string;
-  startDate: Date;
-  endDate: Date;
+  cityIds: string[];
   isEmbedded: boolean;
   createdAt: FieldValue;
   discount: DiscountDetails;
@@ -56,4 +55,18 @@ export interface ShoppingListItem {
   item: string;
   quantity?: number;
   unit?: string;
+}
+
+export interface BrochureRecord {
+  brochureId: string;
+  storeId: string;
+  country: string;
+  cityIds: string[];
+  filename: string;
+  crawledAt: Date;
+  cloudStoragePath?: string;
+  imageCount?: number;
+  hasEncounteredError?: boolean;
+  lastRunId?: string;
+  numberOfItemsCollected?: number;
 }

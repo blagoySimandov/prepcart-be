@@ -1,60 +1,30 @@
-import { onObjectFinalized } from "firebase-functions/v2/storage";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
-import { getStorage } from "firebase-admin/storage";
 import { GoogleGenAI } from "@google/genai";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { getStorage } from "firebase-admin/storage";
 import { logger } from "firebase-functions/v2";
-import { defineSecret } from "firebase-functions/params";
+import { onCall } from "firebase-functions/v2/https";
+import { onObjectFinalized } from "firebase-functions/v2/storage";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { PDFDocument } from "pdf-lib";
+import { PRODUCTS_COLLECTION } from "../constants";
+import { BrochureRecord, DiscountDetails, Product } from "../types";
 import { initializeAppIfNeeded } from "../util/firebase";
-import { DiscountDetails, Product } from "../types";
+import { notifyError } from "../util/error-notification";
+import {
+  API_KEY_SECRET,
+  BROCHURES_COLLECTION,
+  MAX_PAGES_PER_CHUNK,
+  MODEL_NAME,
+  PROMPT_FOR_DISCOUNT_EXTRACTION,
+  TARGET_STORAGE_BUCKET,
+} from "./constants";
 import { AnalysisResult } from "./types";
 
 initializeAppIfNeeded();
 
-const API_KEY_SECRET = defineSecret("API_KEY");
 const db = getFirestore();
-
-const MODEL_NAME = "gemini-2.5-flash-preview-05-20";
-const TARGET_STORAGE_BUCKET = process.env.GCLOUD_PROJECT + ".firebasestorage.app";
-const PRODUCTS_COLLECTION = "products";
-const MAX_PAGES_PER_CHUNK = 20;
-
-const PROMPT_FOR_DISCOUNT_EXTRACTION = `
-Task: Extract all products that have a clear discount from the provided content.
-Output Format: Return a JSON object with a "discounted_products" key.
-<json example>
-{
-  "discounted_products": [
-    {
-      "product_name": "string",
-      "price_before_discount_local": number,
-      "currency_local": "string", // e.g. "EUR", "BGN", "USD", "GBP"
-      "quantity": string, // The quantity for which the product is priced at. e.g. "1 pcs", "1 kg"  or "1 bottle"
-      "discount_percent": number,
-      "page_number": number,
-      "requires_loyalty_card": boolean // true if the discount requires a loyalty card, membership, or special customer card
-      "valid_from": string, // YYYY-MM-DD
-      "valid_until": string // YYYY-MM-DD
-    }
-    ...
-  ]
-}
-</json example>
-
-Requirements:
-- Include only products with a clear, stated discount percentage
-- The "discount_percent" field MUST be an integer. If you see a decimal, round it to the nearest whole number
-- Use the EXACT price as shown in the PDF in its original currency for "price_before_discount_local"
-- Use the correct currency code (EUR, BGN, USD, GBP, etc.) for "currency_local"
-- Set "requires_loyalty_card" to true if the discount mentions requirements like: loyalty card, membership card, club card, customer card, VIP card, rewards card, or similar membership requirements
-- Set "requires_loyalty_card" to false if no membership requirements are mentioned or if the discount is available to all customers
-- Ensure all fields are filled where information is available
-- Ensure product names are in the language of the PDF
-- Round prices to 2 decimal places
-`;
 
 const splitPdf = async (filePath: string, chunkSize: number): Promise<string[]> => {
   const pdfBytes = await fs.promises.readFile(filePath);
@@ -79,6 +49,52 @@ const splitPdf = async (filePath: string, chunkSize: number): Promise<string[]> 
   return chunkPaths;
 };
 
+const getBrochureRecord = async (fileName: string): Promise<BrochureRecord | null> => {
+  const brochureQuery = await db
+    .collection(BROCHURES_COLLECTION)
+    .where("filename", "==", fileName)
+    .limit(1)
+    .get();
+
+  if (brochureQuery.empty) {
+    logger.error("No brochure record found for filename", { fileName });
+    return null;
+  }
+
+  const brochureDoc = brochureQuery.docs[0];
+  const brochureData = brochureDoc.data() as BrochureRecord;
+
+  if (!brochureData.cityIds || brochureData.cityIds.length === 0) {
+    logger.error("Missing required cityIds in brochure record", {
+      brochureId: brochureData.brochureId,
+      fileName,
+    });
+    return null;
+  }
+
+  return brochureData;
+};
+
+const updateBrochureRecord = async (
+  fileName: string,
+  updates: {
+    hasEncounteredError: boolean;
+    lastRunId: string;
+    numberOfItemsCollected?: number;
+  }
+): Promise<void> => {
+  const brochureQuery = await db
+    .collection(BROCHURES_COLLECTION)
+    .where("filename", "==", fileName)
+    .limit(1)
+    .get();
+
+  if (!brochureQuery.empty) {
+    const brochureDoc = brochureQuery.docs[0];
+    await brochureDoc.ref.update(updates);
+  }
+};
+
 const extractDiscountsFromPdf = async (
   filePaths: string[],
   ai: GoogleGenAI,
@@ -95,7 +111,11 @@ const extractDiscountsFromPdf = async (
         file: filePath,
         config: { mimeType: "application/pdf" },
       });
-      logger.info(`File uploaded to Gemini. URI: ${uploadedFile.uri}`);
+      logger.info("File uploaded to Gemini for analysis", {
+        uri: uploadedFile.uri,
+        chunkIndex: i + 1,
+        totalChunks: filePaths.length,
+      });
 
       const result = await ai.models.generateContent({
         model: MODEL_NAME,
@@ -140,7 +160,144 @@ const extractDiscountsFromPdf = async (
     }
   }
 
+  logger.info("Completed discount extraction from all PDF chunks", {
+    totalDiscountedProducts: allDiscountedProducts.length,
+    chunksProcessed: filePaths.length,
+  });
   return allDiscountedProducts;
+};
+
+const processPdfFile = async (filePath: string, eventId?: string): Promise<void> => {
+  const pathParts = filePath.split("/");
+  const fileName = pathParts[pathParts.length - 1];
+
+  const brochureRecord = await getBrochureRecord(fileName);
+  if (!brochureRecord) {
+    throw new Error(`No brochure record found for file: ${fileName}`);
+  }
+
+  const { storeId, country, cityIds, brochureId } = brochureRecord;
+
+  logger.info("Starting PDF processing for brochure", {
+    brochureId,
+    fileName,
+    storeId,
+    country,
+    cities: cityIds.join(", "),
+    filePath,
+  });
+
+  const tempFilePath = path.join(os.tmpdir(), fileName);
+  const bucket = getStorage().bucket(TARGET_STORAGE_BUCKET);
+
+  try {
+    await bucket.file(filePath).download({ destination: tempFilePath });
+
+    const apiKey = API_KEY_SECRET.value();
+    if (!apiKey) throw new Error("API_KEY secret is not configured");
+
+    const ai = new GoogleGenAI({ apiKey });
+
+    const chunkPaths = await splitPdf(tempFilePath, MAX_PAGES_PER_CHUNK);
+    const products = await extractDiscountsFromPdf(chunkPaths, ai, MAX_PAGES_PER_CHUNK);
+
+    if (products.length === 0) {
+      logger.info("No discounted products found in brochure", {
+        brochureId,
+        fileName,
+        filePath,
+      });
+
+      // Update brochure record with success status but 0 items
+      const baseId = eventId || `retry_${Date.now()}`;
+      await updateBrochureRecord(fileName, {
+        hasEncounteredError: false,
+        lastRunId: baseId,
+        numberOfItemsCollected: 0,
+      });
+      return;
+    }
+
+    logger.info("Successfully extracted discounted products from brochure", {
+      brochureId,
+      fileName,
+      productCount: products.length,
+    });
+
+    const firestoreBatch = db.batch();
+    let productIndex = 0;
+
+    // Use eventId if provided, otherwise generate a timestamp-based ID
+    const baseId = eventId || `retry_${Date.now()}`;
+
+    // Create products for each city
+    cityIds.forEach(() => {
+      products.forEach((productDetails) => {
+        const docId = `${baseId}_${productIndex}`;
+        const docRef = db.collection(PRODUCTS_COLLECTION).doc(docId);
+        const newProduct: Product = {
+          id: docId,
+          sourceFileUri: `gs://${TARGET_STORAGE_BUCKET}/${filePath}`,
+          storeId,
+          country,
+          cityIds,
+          isEmbedded: false,
+          createdAt: FieldValue.serverTimestamp(),
+          discount: productDetails,
+        };
+        firestoreBatch.set(docRef, newProduct);
+        productIndex++;
+      });
+    });
+
+    await firestoreBatch.commit();
+    const totalProducts = products.length * cityIds.length;
+    logger.info("Successfully stored products in Firestore for brochure", {
+      brochureId,
+      fileName,
+      totalProducts,
+      cities: cityIds.join(", "),
+      storeId,
+      country,
+    });
+
+    // Update brochure record with success status
+    await updateBrochureRecord(fileName, {
+      hasEncounteredError: false,
+      lastRunId: baseId,
+      numberOfItemsCollected: totalProducts,
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    logger.error("FATAL: Error processing PDF for discount extraction", {
+      brochureId,
+      fileName,
+      filePath,
+      error: errorMessage,
+    });
+
+    // Update brochure record with error status
+    const baseId = eventId || `retry_${Date.now()}`;
+    await updateBrochureRecord(fileName, {
+      hasEncounteredError: true,
+      lastRunId: baseId,
+      numberOfItemsCollected: 0,
+    });
+
+    await notifyError(`PDF processing failed for brochure ${brochureId}`, {
+      brochureId,
+      fileName,
+      filePath,
+      storeId,
+      country,
+      cities: cityIds.join(", "),
+      error: errorMessage,
+    });
+
+    throw error;
+  } finally {
+    if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+  }
 };
 
 export const processPdfOnUpload = onObjectFinalized(
@@ -154,79 +311,71 @@ export const processPdfOnUpload = onObjectFinalized(
     const { name: filePath, contentType } = event.data;
 
     if (!filePath.startsWith("brochures/") || !contentType?.startsWith("application/pdf")) {
-      logger.info("File is not a processable PDF brochure. Skipping.", {
+      logger.info("File is not a processable PDF brochure, skipping", {
         filePath,
+        contentType,
       });
       return;
     }
 
-    const pathParts = filePath.split("/");
-    const fileName = pathParts[pathParts.length - 1];
-    const storeInfo = fileName.replace(".pdf", "").split("_");
-    const storeId = storeInfo[0];
-    const country = storeInfo[1];
-    const startDateStr = storeInfo[2];
-    const endDateStr = storeInfo[3];
-
-    const parseDate = (dateStr: string) => {
-      const [day, month, year] = dateStr.split(".").map(Number);
-      return new Date(year, month - 1, day);
-    };
-
-    const startDate = parseDate(startDateStr);
-    const endDate = new Date(parseDate(endDateStr).setHours(23, 59, 59, 999));
-
-    logger.info("Processing PDF for discount extraction:", { filePath });
-
-    const tempFilePath = path.join(os.tmpdir(), fileName);
-    const bucket = getStorage().bucket(TARGET_STORAGE_BUCKET);
-
     try {
-      await bucket.file(filePath).download({ destination: tempFilePath });
-
-      const apiKey = API_KEY_SECRET.value();
-      if (!apiKey) throw new Error("API_KEY secret is not configured");
-
-      const ai = new GoogleGenAI({ apiKey });
-
-      const chunkPaths = await splitPdf(tempFilePath, MAX_PAGES_PER_CHUNK);
-      const products = await extractDiscountsFromPdf(chunkPaths, ai, MAX_PAGES_PER_CHUNK);
-
-      if (products.length === 0) {
-        logger.info("No discounted products found in the PDF.", { filePath });
-        return;
-      }
-      logger.info(`Extracted ${products.length} discounted products.`);
-
-      const firestoreBatch = db.batch();
-      products.forEach((productDetails, index) => {
-        const docId = `${event.id}_${index}`;
-        const docRef = db.collection(PRODUCTS_COLLECTION).doc(docId);
-        const newProduct: Product = {
-          id: docId,
-          sourceFileUri: `gs://${TARGET_STORAGE_BUCKET}/${filePath}`,
-          storeId,
-          country,
-          startDate,
-          endDate,
-          isEmbedded: false,
-          createdAt: FieldValue.serverTimestamp(),
-          discount: productDetails,
-        };
-        firestoreBatch.set(docRef, newProduct);
-      });
-
-      await firestoreBatch.commit();
-      logger.info(`Successfully stored ${products.length} new products in Firestore.`);
+      await processPdfFile(filePath, event.id);
     } catch (error: unknown) {
       if (error instanceof Error) {
-        logger.error("FATAL: Error processing PDF for discount extraction:", {
+        logger.error("FATAL: Error processing PDF for discount extraction", {
           filePath,
+          eventId: event.id,
           error: error.message,
         });
+
+        await notifyError("PDF upload processing failed", {
+          filePath,
+          eventId: event.id,
+          error: error.message,
+          source: "processPdfOnUpload",
+        });
       }
-    } finally {
-      if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+    }
+  },
+);
+
+export const retryProcessPdf = onCall(
+  {
+    memory: "1GiB",
+    timeoutSeconds: 300,
+    secrets: [API_KEY_SECRET],
+    region: "europe-west1",
+  },
+  async (request) => {
+    const { pdfPath } = request.data;
+
+    if (!pdfPath) {
+      throw new Error("pdfPath is required");
+    }
+
+    if (!pdfPath.startsWith("brochures/") || !pdfPath.endsWith(".pdf")) {
+      throw new Error("Invalid PDF path. Must start with 'brochures/' and end with '.pdf'");
+    }
+
+    logger.info("Retrying PDF processing", { pdfPath });
+
+    try {
+      await processPdfFile(pdfPath);
+      return { success: true, message: "PDF processed successfully" };
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      logger.error("Error retrying PDF processing", {
+        pdfPath,
+        error: errorMessage,
+      });
+
+      await notifyError("PDF retry processing failed", {
+        pdfPath,
+        error: errorMessage,
+        source: "retryProcessPdf",
+      });
+
+      throw new Error(`Failed to process PDF: ${errorMessage}`);
     }
   },
 );

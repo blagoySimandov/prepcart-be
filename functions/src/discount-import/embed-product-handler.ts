@@ -5,11 +5,11 @@ import { logger } from "firebase-functions/v2";
 import { defineSecret } from "firebase-functions/params";
 import { initializeAppIfNeeded } from "../util/firebase";
 import { Product } from "./types";
-import { API_KEY_SECRET, EMBEDDING_MODEL, PRODUCTS_COLLECTION } from "../constants";
+import { API_KEY_SECRET_LITERAL, EMBEDDING_MODEL, PRODUCTS_COLLECTION } from "../constants";
 
 initializeAppIfNeeded();
 
-const API_KEY = defineSecret(API_KEY_SECRET);
+const API_KEY = defineSecret(API_KEY_SECRET_LITERAL);
 const db = getFirestore();
 
 export const onProductEmbed = onTaskDispatched<Product>(
